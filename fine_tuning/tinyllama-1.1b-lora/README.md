@@ -1,6 +1,11 @@
-# TinyLlama Separate Setup (Train + Serve)
+# TinyLlama LoRA Fine-Tuning (Train + Serve)
 
-This folder is isolated from your custom `tiny_llm.py` flow and is meant for quick chat fine-tuning on a pretrained tiny model.
+Part of [mini-llms-playground](../../README.md)'s **fine-tuning track** — see the
+[top-level README](../../README.md) and [docs index](../../docs/README.md) for how this
+relates to the [from-scratch track](../../from_scratch/custom-gpt-153m/README.md).
+
+This folder is isolated from the from-scratch `tiny_llm.py` flow and is meant for quick
+chat fine-tuning on a pretrained tiny model.
 
 Default model:
 - `TinyLlama/TinyLlama-1.1B-Chat-v1.0`
@@ -11,14 +16,14 @@ Default dataset:
 ## 1) Install
 
 ```bash
-cd tinyllama_chat
+cd fine_tuning/tinyllama-1.1b-lora
 python -m pip install -r requirements.txt
 ```
 
 ## 2) Train LoRA adapter
 
 ```bash
-cd tinyllama_chat
+cd fine_tuning/tinyllama-1.1b-lora
 bash scripts/train.sh
 ```
 
@@ -41,13 +46,13 @@ RESUME_FROM_CHECKPOINT=outputs/tinyllama_lora/checkpoint-500 bash scripts/train.
 ```
 
 Output adapter path:
-- `tinyllama_chat/outputs/tinyllama_lora/final`
-- checkpoints are written under `tinyllama_chat/outputs/tinyllama_lora/checkpoint-*`
+- `fine_tuning/tinyllama-1.1b-lora/outputs/tinyllama_lora/final`
+- checkpoints are written under `fine_tuning/tinyllama-1.1b-lora/outputs/tinyllama_lora/checkpoint-*`
 
 ## 3) Serve API
 
 ```bash
-cd tinyllama_chat
+cd fine_tuning/tinyllama-1.1b-lora
 bash scripts/serve.sh
 ```
 

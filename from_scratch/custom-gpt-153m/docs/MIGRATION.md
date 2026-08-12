@@ -30,16 +30,16 @@ Data and code consistency:
 On Mac, from repo root:
 
 ```bash
-rsync -avz user@gpu-host:/path/to/tiny_llm/tiny_llm_checkpoint_latest.pt .
-rsync -avz user@gpu-host:/path/to/tiny_llm/tiny_llm_checkpoint_best.pt . || true
-rsync -avz user@gpu-host:/path/to/tiny_llm/logs/train_eval_history.csv logs/ || true
+rsync -avz user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/tiny_llm_checkpoint_latest.pt .
+rsync -avz user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/tiny_llm_checkpoint_best.pt . || true
+rsync -avz user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/logs/train_eval_history.csv logs/ || true
 ```
 
 If you prefer `scp`:
 
 ```bash
-scp user@gpu-host:/path/to/tiny_llm/tiny_llm_checkpoint_latest.pt .
-scp user@gpu-host:/path/to/tiny_llm/tiny_llm_checkpoint_best.pt . 2>/dev/null || true
+scp user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/tiny_llm_checkpoint_latest.pt .
+scp user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/tiny_llm_checkpoint_best.pt . 2>/dev/null || true
 ```
 
 Resume:
@@ -53,15 +53,15 @@ RESUME_TRAINING=1 python3 tiny_llm.py
 From Mac repo root:
 
 ```bash
-rsync -avz tiny_llm_checkpoint_latest.pt user@gpu-host:/path/to/tiny_llm/
-rsync -avz tiny_llm_checkpoint_best.pt user@gpu-host:/path/to/tiny_llm/ || true
-rsync -avz logs/train_eval_history.csv user@gpu-host:/path/to/tiny_llm/logs/ || true
+rsync -avz tiny_llm_checkpoint_latest.pt user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/
+rsync -avz tiny_llm_checkpoint_best.pt user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/ || true
+rsync -avz logs/train_eval_history.csv user@gpu-host:/path/to/mini-llms-playground/from_scratch/custom-gpt-153m/logs/ || true
 ```
 
 Then on GPU host:
 
 ```bash
-cd /path/to/tiny_llm
+cd /path/to/mini-llms-playground/from_scratch/custom-gpt-153m
 RESUME_TRAINING=1 python3 tiny_llm.py
 ```
 
