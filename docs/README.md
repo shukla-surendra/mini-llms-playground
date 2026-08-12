@@ -13,10 +13,16 @@ pretraining, fine-tuning techniques, and serving — from layman's terms up to a
 depth, with every concept grounded in this repo's actual code, not generic examples.
 Start there if the goal is understanding, not just running commands.
 
-## From-scratch track: [`custom-gpt-153m`](../from_scratch/custom-gpt-153m/)
+## From-scratch track
 
-A ~153M-parameter GPT-style model, architecture and training loop written from scratch,
-trained on conversational data (LMSYS Chat-1M plus several public chat datasets).
+Two experiments, both training a GPT-style model's architecture and training loop
+completely from scratch, at different scales and for different goals:
+
+### [`custom-gpt-153m`](../from_scratch/custom-gpt-153m/)
+
+A ~153M-parameter model trained on conversational data (LMSYS Chat-1M plus several
+public chat datasets) — the goal is learning the full stack at meaningful scale, not
+polished output quality.
 
 | Doc | Covers |
 |---|---|
@@ -24,6 +30,21 @@ trained on conversational data (LMSYS Chat-1M plus several public chat datasets)
 | [`docs/LLM_DEV_GUIDE.md`](../from_scratch/custom-gpt-153m/docs/LLM_DEV_GUIDE.md) | Beginner-friendly, end-to-end walkthrough of every stage (data → tokenize → train → infer → evaluate) and why each piece exists |
 | [`docs/API_SERVER.md`](../from_scratch/custom-gpt-153m/docs/API_SERVER.md) | Running and calling the FastAPI serving endpoint |
 | [`docs/MIGRATION.md`](../from_scratch/custom-gpt-153m/docs/MIGRATION.md) | Moving a training run between a cloud GPU machine and a local Mac (checkpoint sync, resume) |
+
+### [`tinystories-gpt-6m`](../from_scratch/tinystories-gpt-6m/)
+
+A ~5.85M-parameter model trained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories)
+(a dataset built with a deliberately restricted vocabulary) — the goal is the opposite
+trade-off from `custom-gpt-153m`: fast to train on a laptop (~15 minutes end to end on
+Apple Silicon MPS) and genuinely coherent output, not maximal scale.
+
+| Doc | Covers |
+|---|---|
+| [`README.md`](../from_scratch/tinystories-gpt-6m/README.md) | Quickstart, real training results and generated output from this project's own run |
+| [`docs/DATASET_AND_TOKENIZER.md`](../from_scratch/tinystories-gpt-6m/docs/DATASET_AND_TOKENIZER.md) | Why TinyStories, why a custom small vocabulary instead of GPT-2's |
+| [`docs/ARCHITECTURE.md`](../from_scratch/tinystories-gpt-6m/docs/ARCHITECTURE.md) | Every sizing decision, full parameter-count derivation |
+| [`docs/TRAINING.md`](../from_scratch/tinystories-gpt-6m/docs/TRAINING.md) | Hyperparameters, real MPS throughput, resume, diagnosing a bad run |
+| [`docs/SERVING.md`](../from_scratch/tinystories-gpt-6m/docs/SERVING.md) | Inference and API server, what's deliberately out of scope at this size |
 
 ## Fine-tuning track: [`tinyllama-1.1b-lora`](../fine_tuning/tinyllama-1.1b-lora/)
 

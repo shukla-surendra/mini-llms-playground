@@ -1,0 +1,8 @@
+torch>=2.2
+datasets>=2.19
+tokenizers>=0.19
+numpy>=1.26
+tqdm>=4.66
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
