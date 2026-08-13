@@ -79,11 +79,11 @@ and the wider landscape of techniques it's one instance of.
 
 | # | Chapter | Status |
 |---|---|---|
-| 16 | The Fine-Tuning Landscape: Full FT, PEFT, Prompting, RAG | planned |
-| 17 | LoRA & QLoRA, Mechanism by Mechanism | planned |
-| 18 | Instruction Tuning & Supervised Fine-Tuning (SFT) | planned |
-| 19 | RLHF, DPO, and Preference Optimization | planned |
-| 20 | Evaluating a Fine-Tuned Model | planned |
+| 16 | [The Fine-Tuning Landscape: Full FT, PEFT, Prompting, RAG](16_fine_tuning_landscape.md) | **written** |
+| 17 | [LoRA & QLoRA, Mechanism by Mechanism](17_lora_and_qlora.md) | **written** |
+| 18 | [Instruction Tuning & Supervised Fine-Tuning (SFT)](18_instruction_tuning_and_sft.md) | **written** |
+| 19 | [RLHF, DPO, and Preference Optimization](19_rlhf_and_dpo.md) | **written** |
+| 20 | [Evaluating a Fine-Tuned Model](20_evaluating_a_fine_tuned_model.md) | **written** |
 
 ### Part 4 — Serving: Turning a Trained Model Into Something You Can Talk To
 

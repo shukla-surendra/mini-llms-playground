@@ -1,18 +1,20 @@
 # mini-llms-playground
 
-A hands-on lab for exploring small language models two ways: **training a GPT-style
-model completely from scratch**, and **fine-tuning an existing pretrained model**. Both
-tracks are meant to grow over time as more experiments get added — this isn't one fixed
-project, it's a home for many small, runnable LLM experiments.
+A hands-on lab for exploring small language models three ways: **training a GPT-style
+model completely from scratch**, **fine-tuning an existing pretrained model**, and
+**serving an original author checkpoint standalone**, unmodified, as its own baseline.
+All three tracks are meant to grow over time as more experiments get added — this isn't
+one fixed project, it's a home for many small, runnable LLM experiments.
 
-## The two tracks
+## The three tracks
 
 | Track | What it is | Start here |
 |---|---|---|
 | [`from_scratch/`](from_scratch/) | Custom architecture, custom training loop, trained on conversation data from zero | [`from_scratch/custom-gpt-153m/README.md`](from_scratch/custom-gpt-153m/README.md) |
 | [`fine_tuning/`](fine_tuning/) | Adapting an existing pretrained model (LoRA) to a new dataset/behavior | [`fine_tuning/tinyllama-1.1b-lora/README.md`](fine_tuning/tinyllama-1.1b-lora/README.md) |
+| [`base_models/`](base_models/) | Serving an original, unmodified author checkpoint on its own — no adapter, no training — as an independently runnable baseline | [`base_models/tinyllama-1.1b-base-serving/README.md`](base_models/tinyllama-1.1b-base-serving/README.md) |
 
-Each experiment lives in its own subfolder under one of these two tracks, with its own
+Each experiment lives in its own subfolder under one of these three tracks, with its own
 README, requirements, and scripts — self-contained enough to run independently of the
 others.
 
@@ -33,6 +35,13 @@ of the same task:
 
 Keeping them structurally separate makes the comparison itself a learning tool: run the
 same rough dataset through both, and the gap between them *is* the lesson.
+
+- **Base-model serving** doesn't train anything at all — it loads the exact checkpoint
+  published by the model's original authors (e.g. `TinyLlama/TinyLlama-1.1B-Chat-v1.0`,
+  `HuggingFaceTB/SmolLM2-135M`) and exposes it over its own API, with the original
+  repo/paper/license details on record. It exists so that baseline is queryable on its
+  own, live, side by side with its fine-tuned counterpart — not only ever visible inside
+  an offline before/after comparison script.
 
 ## Learn the concepts, not just the commands
 

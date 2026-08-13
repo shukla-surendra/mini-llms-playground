@@ -1,0 +1,15 @@
+[project]
+name = "tinyllama-1.1b-base-serving"
+version = "0.1.0"
+description = "Serves the ORIGINAL, unmodified TinyLlama-1.1B-Chat checkpoint (no LoRA adapter) as its own endpoint"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "transformers>=4.44",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.6",
+]
+
+[tool.uv]
+package = false

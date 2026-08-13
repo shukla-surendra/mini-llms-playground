@@ -46,14 +46,64 @@ Apple Silicon MPS) and genuinely coherent output, not maximal scale.
 | [`docs/TRAINING.md`](../from_scratch/tinystories-gpt-6m/docs/TRAINING.md) | Hyperparameters, real MPS throughput, resume, diagnosing a bad run |
 | [`docs/SERVING.md`](../from_scratch/tinystories-gpt-6m/docs/SERVING.md) | Inference and API server, what's deliberately out of scope at this size |
 
-## Fine-tuning track: [`tinyllama-1.1b-lora`](../fine_tuning/tinyllama-1.1b-lora/)
+## Fine-tuning track
 
-LoRA fine-tuning of the pretrained `TinyLlama/TinyLlama-1.1B-Chat-v1.0` model on
-`HuggingFaceH4/ultrachat_200k`.
+Two LoRA fine-tuning experiments, at different points on the "already instruction-tuned"
+vs. "true base model" spectrum. Each has a standalone counterpart in the
+[base-models track](#base-models-track) below, serving that same model's original,
+unmodified checkpoint on its own.
+
+### [`tinyllama-1.1b-lora`](../fine_tuning/tinyllama-1.1b-lora/)
+
+LoRA fine-tuning of the pretrained, **already chat-tuned** `TinyLlama/TinyLlama-1.1B-
+Chat-v1.0` model on `HuggingFaceH4/ultrachat_200k` — an incremental adaptation.
 
 | Doc | Covers |
 |---|---|
 | [`README.md`](../fine_tuning/tinyllama-1.1b-lora/README.md) | Install, LoRA training (with resume/checkpoint knobs), serving, MacBook/MPS-specific notes |
+
+### [`smollm2-135m-dolly-lora`](../fine_tuning/smollm2-135m-dolly-lora/)
+
+LoRA fine-tuning of `HuggingFaceTB/SmolLM2-135M`, a genuine **base model with no chat
+template**, on `databricks/databricks-dolly-15k` — teaching instruction-following
+essentially from scratch, specifically so a before/after comparison shows a dramatic,
+unmistakable difference rather than an incremental one.
+
+| Doc | Covers |
+|---|---|
+| [`README.md`](../fine_tuning/smollm2-135m-dolly-lora/README.md) | Quickstart, what makes this project's before/after comparison different from `tinyllama-1.1b-lora`'s |
+| [`docs/APPROACH.md`](../fine_tuning/smollm2-135m-dolly-lora/docs/APPROACH.md) | Why this model, dataset, and technique — each chosen to maximize the visible before/after contrast |
+| [`docs/TRAINING_RESULTS.md`](../fine_tuning/smollm2-135m-dolly-lora/docs/TRAINING_RESULTS.md) | The real training run: loss curve, timing |
+| [`docs/BEFORE_AFTER_COMPARISON.md`](../fine_tuning/smollm2-135m-dolly-lora/docs/BEFORE_AFTER_COMPARISON.md) | Real, unedited generated output — base model vs. fine-tuned, same prompts |
+
+## Base-models track
+
+Serves each fine-tuning experiment's **original, unmodified author checkpoint** as its
+own standalone FastAPI endpoint — no LoRA adapter, no training — so the base model is a
+first-class, independently runnable thing in this repo, not only ever the "before" half
+of a comparison baked into another project.
+
+### [`tinyllama-1.1b-base-serving`](../base_models/tinyllama-1.1b-base-serving/)
+
+Serves the **original** `TinyLlama/TinyLlama-1.1B-Chat-v1.0` checkpoint — no LoRA
+adapter — as its own FastAPI endpoint (port `8002`), separate from `tinyllama-1.1b-lora`'s
+adapter-loaded server (port `8001`).
+
+| Doc | Covers |
+|---|---|
+| [`README.md`](../base_models/tinyllama-1.1b-base-serving/README.md) | Quickstart, original-author repo/paper/license details, why it's kept separate from the LoRA server |
+| [`docs/MODEL_DETAILS.md`](../base_models/tinyllama-1.1b-base-serving/docs/MODEL_DETAILS.md) | Full architecture (verified against the checkpoint's own `config.json`), tokenizer/chat-template details, pretraining data & procedure, the SFT+DPO recipe behind `-Chat-v1.0`, reported benchmarks, known limitations |
+
+### [`smollm2-135m-base-serving`](../base_models/smollm2-135m-base-serving/)
+
+Serves the **original** `HuggingFaceTB/SmolLM2-135M` base checkpoint — no LoRA adapter,
+no chat template, plain-text completion only — as its own FastAPI endpoint (port `8003`),
+separate from `smollm2-135m-dolly-lora`'s fine-tuned server.
+
+| Doc | Covers |
+|---|---|
+| [`README.md`](../base_models/smollm2-135m-base-serving/README.md) | Quickstart, original-author repo/paper/license details, why this endpoint has no chat template |
+| [`docs/MODEL_DETAILS.md`](../base_models/smollm2-135m-base-serving/docs/MODEL_DETAILS.md) | Full architecture (verified against the checkpoint's own `config.json`), tokenizer/special-token details, pretraining data & procedure, why there's no chat template, reported benchmarks, known limitations |
 
 ## Comparing the two tracks directly
 
@@ -73,11 +123,11 @@ or dataset, without re-deriving the architecture.
 
 ## Adding a new experiment
 
-Both tracks are meant to hold more than one experiment over time. To add one:
+All three tracks are meant to hold more than one experiment over time. To add one:
 
-1. Create a new subfolder under `from_scratch/` or `fine_tuning/`, named for the model/
-   approach (matching the existing `custom-gpt-153m/` and `tinyllama-1.1b-lora/`
-   convention).
+1. Create a new subfolder under `from_scratch/`, `fine_tuning/`, or `base_models/`, named
+   for the model/approach (matching the existing `custom-gpt-153m/`,
+   `tinyllama-1.1b-lora/`, and `tinyllama-1.1b-base-serving/` convention).
 2. Give it its own `README.md`, `requirements.txt`, and any scripts it needs — keep it
    self-contained rather than sharing code across experiments, so each one stays
    runnable independently.

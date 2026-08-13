@@ -7,6 +7,11 @@ relates to the [from-scratch track](../../from_scratch/custom-gpt-153m/README.md
 This folder is isolated from the from-scratch `tiny_llm.py` flow and is meant for quick
 chat fine-tuning on a pretrained tiny model.
 
+Want to run the original, unmodified checkpoint on its own (no adapter) instead of always
+seeing it paired with LoRA? See
+[`base_models/tinyllama-1.1b-base-serving`](../../base_models/tinyllama-1.1b-base-serving/)
+— same model, its own endpoint, original-author repo details included.
+
 Default model:
 - `TinyLlama/TinyLlama-1.1B-Chat-v1.0`
 

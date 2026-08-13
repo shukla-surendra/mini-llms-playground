@@ -29,6 +29,7 @@ dist/
 # LLM project artifacts (generated)
 *.pt
 *.pth
+*.safetensors
 data/train.txt
 data/test.txt
 data/test_prompts.txt
@@ -38,4 +39,7 @@ data/test_prompts.txt
 data
 logs
 logs/train_eval_history.csv
-tinyllama_chat/outputs/*
+# matches at any depth, so this covers every fine-tuning project's outputs/ dir
+# (e.g. fine_tuning/tinyllama-1.1b-lora/outputs/, fine_tuning/*/outputs/), not just one
+outputs/
+checkpoints_archive/
