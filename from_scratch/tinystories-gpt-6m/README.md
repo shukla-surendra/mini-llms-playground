@@ -34,26 +34,31 @@ garbage.** That's a narrower, genuinely achievable target, and every design deci
 
 ## Quickstart
 
+This project is managed with [`uv`](https://docs.astral.sh/uv/) — no manual venv/pip
+steps needed; `uv run` (used by every `make` target below) provisions `.venv` from
+[`pyproject.toml`](pyproject.toml) automatically on first use.
+
 ```bash
 cd from_scratch/tinystories-gpt-6m
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
 
 # 1. Download data + train tokenizer + tokenize (~100k stories by default)
-./scripts/workflow.sh data
+make data
 
-# 2. Train (~12-15 min on Apple Silicon MPS for the default 4000 steps)
-./scripts/workflow.sh train
+# 2. Train (~12-15 min on Apple Silicon MPS for the default step count)
+make train
 
 # 3. Generate
-./scripts/workflow.sh infer
+make infer
 
 # 4. Serve
-./scripts/workflow.sh serve
+make serve
 ```
 
 Training auto-resumes from `tinystories_gpt_checkpoint_latest.pt` if present — `Ctrl+C`
-stops safely, `RESUME_TRAINING=0 python train.py` starts fresh.
+stops safely, `make train-fresh` starts fresh. Run `make help` for every available
+target, including dataset-round snapshots and publishing to the Hugging Face Hub.
+`scripts/workflow.sh` (using `uv run` directly) is also available as a plain-shell
+alternative to the Makefile.
 
 ## Real results from this project's own training run
 
@@ -116,7 +121,27 @@ on why narrowing the dataset (not just shrinking the model) is what actually mak
   the real alternatives (flash attention, SwiGLU, RoPE, RMSNorm, and more).
 - [`docs/TRAINING.md`](docs/TRAINING.md) — hyperparameters, real MPS throughput numbers,
   resume behavior, how to diagnose a bad run.
+- [`docs/READING_TRAINING_OUTPUT.md`](docs/READING_TRAINING_OUTPUT.md) — the live
+  progress-bar output (`loss=`, `lr=`, `train=`, `val=`, `step/s`), decoded term by term.
+- [`docs/HOW_MUCH_TRAINING_IS_ENOUGH.md`](docs/HOW_MUCH_TRAINING_IS_ENOUGH.md) — what an
+  epoch is, and how to actually decide when to stop training, using this project's real
+  evaluation history as the worked example.
+- [`docs/CONTINUING_TRAINING_ON_NEW_DATA.md`](docs/CONTINUING_TRAINING_ON_NEW_DATA.md) —
+  continuing to train an existing checkpoint on a *different* dataset (continued
+  pretraining), the tokenizer-mismatch pitfall that silently corrupts this if done wrong,
+  and the `--reuse-tokenizer` fix.
+- [`docs/CONTINUAL_TRAINING_LOW_RESOURCE.md`](docs/CONTINUAL_TRAINING_LOW_RESOURCE.md) —
+  the full recommended workflow for repeatedly training on a *growing sequence* of
+  datasets, no GPU required: replay mixing across all prior rounds
+  (`scripts/build_replay_mix.py`) and reversible checkpoint snapshots
+  (`make snapshot`/`make restore-snapshot`).
+- [`docs/PUBLISHING_TO_HUGGING_FACE.md`](docs/PUBLISHING_TO_HUGGING_FACE.md) — publishing
+  the trained model, tokenizer, and code to the Hugging Face Hub
+  (`scripts/upload_to_hf.py`), and the real model card ([`model_card.md`](model_card.md)).
 - [`docs/SERVING.md`](docs/SERVING.md) — how generation and the API server work, and what
   production-serving concerns are deliberately out of scope at this size.
+- [`docs/TEMPERATURE_AND_SAMPLING.md`](docs/TEMPERATURE_AND_SAMPLING.md) — what
+  temperature is and exactly how it reshapes the output distribution, with a worked
+  numerical example.
 - [`../../docs/llm-engineering/`](../../docs/llm-engineering/00_roadmap.md) — the
   from-first-principles curriculum every concept above links back to.

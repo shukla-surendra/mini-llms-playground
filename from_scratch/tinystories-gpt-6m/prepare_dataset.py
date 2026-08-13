@@ -29,6 +29,14 @@ def parse_args():
                     help="Number of VALIDATION stories to use (out of ~22k available)")
     p.add_argument("--vocab-size", type=int, default=4096)
     p.add_argument("--out-dir", default="data")
+    p.add_argument("--reuse-tokenizer", default=None,
+                    help="Path to an existing tokenizer.json to tokenize this data with, "
+                         "instead of training a new one. REQUIRED if you plan to continue "
+                         "training an existing checkpoint on this new data — see "
+                         "docs/CONTINUING_TRAINING_ON_NEW_DATA.md. Using a different "
+                         "tokenizer than the checkpoint was trained with silently corrupts "
+                         "generation, since token IDs would no longer mean the same things "
+                         "to the model's embedding table.")
     return p.parse_args()
 
 
@@ -75,8 +83,15 @@ def main():
     val_texts = [row["text"] for row in val_ds]
     print(f"[data] {len(train_texts):,} train stories, {len(val_texts):,} val stories")
 
-    tokenizer_path = out_dir / "tokenizer.json"
-    tokenizer = train_tokenizer(train_texts, args.vocab_size, tokenizer_path)
+    if args.reuse_tokenizer:
+        print(f"[tokenizer] reusing existing tokenizer from {args.reuse_tokenizer} "
+              f"(NOT training a new one)")
+        tokenizer = Tokenizer.from_file(args.reuse_tokenizer)
+        tokenizer_path = out_dir / "tokenizer.json"
+        tokenizer.save(str(tokenizer_path))  # keep a copy alongside this data for reference
+    else:
+        tokenizer_path = out_dir / "tokenizer.json"
+        tokenizer = train_tokenizer(train_texts, args.vocab_size, tokenizer_path)
 
     train_tokens = tokenize_split(tokenizer, train_texts, out_dir / "train.bin")
     val_tokens = tokenize_split(tokenizer, val_texts, out_dir / "val.bin")

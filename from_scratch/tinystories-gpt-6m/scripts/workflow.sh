@@ -4,13 +4,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_DIR"
 
-if [[ -n "${PY:-}" ]]; then
-  PY_BIN="$PY"
-elif command -v python >/dev/null 2>&1; then
-  PY_BIN="python"
-else
-  PY_BIN="python3"
-fi
+# This project is uv-managed (see pyproject.toml) — `uv run` provisions/updates .venv
+# automatically before every command, so no separate install step is needed here.
+# Equivalent, and preferred, Makefile targets exist for all of this (`make data`,
+# `make train`, etc., plus `make snapshot`/`make publish` which this script doesn't
+# cover) — this script is kept for people who prefer a plain shell entrypoint.
 
 MAX_SAMPLES="${MAX_SAMPLES:-100000}"
 VOCAB_SIZE="${VOCAB_SIZE:-4096}"
@@ -27,19 +25,19 @@ EOF
 }
 
 run_data() {
-  "$PY_BIN" prepare_dataset.py --max-samples "$MAX_SAMPLES" --vocab-size "$VOCAB_SIZE"
+  uv run prepare_dataset.py --max-samples "$MAX_SAMPLES" --vocab-size "$VOCAB_SIZE"
 }
 
 run_train() {
-  "$PY_BIN" train.py
+  uv run train.py
 }
 
 run_infer() {
-  "$PY_BIN" inference.py --prompt "${PROMPT:-Once upon a time,}"
+  uv run inference.py --prompt "${PROMPT:-Once upon a time,}"
 }
 
 run_serve() {
-  "$PY_BIN" -m uvicorn api_server:app --host 127.0.0.1 --port 8010 --reload
+  uv run uvicorn api_server:app --host 127.0.0.1 --port 8010 --reload
 }
 
 if [[ $# -lt 1 ]]; then

@@ -7,8 +7,10 @@ from
 [`../../../docs/llm-engineering/08_what_is_a_language_model.md`](../../../docs/llm-engineering/08_what_is_a_language_model.md) —
 repeatedly: predict a probability distribution over the next token, sample (or take the
 argmax of) one token, append it, repeat. If any of `temperature`, `top-k`, `top-p`, or
-`repetition_penalty` are unfamiliar, that chapter covers each precisely; this doc only
-covers what's specific to this project's serving setup.
+`repetition_penalty` are unfamiliar, that chapter covers each precisely — and
+[`TEMPERATURE_AND_SAMPLING.md`](TEMPERATURE_AND_SAMPLING.md) goes deeper on temperature
+specifically, with a worked numerical example. This doc only covers what's specific to
+this project's serving setup.
 
 ## `inference.py`: command-line generation
 

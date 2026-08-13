@@ -7,6 +7,11 @@
 (forward pass → loss → backprop → gradient descent) — this doc assumes that mechanism is
 understood and focuses on what's specific to *this* project: the actual hyperparameter
 values, why they're set the way they are, and real, observed performance on a MacBook.
+If you want the live progress-bar output itself decoded term by term (`loss=`, `lr=`,
+`train=`, `val=`, `step/s`, and the rest), see
+[`READING_TRAINING_OUTPUT.md`](READING_TRAINING_OUTPUT.md). For what "epoch" means for
+this project and how to actually decide when to stop training, see
+[`HOW_MUCH_TRAINING_IS_ENOUGH.md`](HOW_MUCH_TRAINING_IS_ENOUGH.md).
 
 ## Hyperparameters, and the reasoning behind each
 
@@ -75,6 +80,30 @@ current run's config before resuming (see
 [`../../../docs/llm-engineering/02_parameters_vs_hyperparameters.md`'s explanation of why
 this check exists](../../../docs/llm-engineering/02_parameters_vs_hyperparameters.md#try-it-yourself)).
 Resume by simply re-running `python train.py` — `RESUME_TRAINING=0` forces a fresh start.
+
+### The gotcha: resuming doesn't automatically train further past `STEPS`
+
+`STEPS` (default `5000`) is a **target step count**, not "how many additional steps to
+run." Resume logic computes `start_step = saved_checkpoint_step + 1` and then runs
+`for step in range(start_step, STEPS)`. If your saved checkpoint is already at or past
+`STEPS - 1`, this loop is empty (or nearly so) — the run will complete almost instantly,
+print the same final numbers your checkpoint already had, and **train nothing new**, even
+though it looks like a normal completed run. This is expected behavior, not a bug — but
+it's genuinely easy to mistake for "I just trained more and got no improvement." To
+actually continue training past a checkpoint that's already at your current `STEPS`
+target, **raise `STEPS`** for the resumed run:
+
+```bash
+STEPS=10000 make train-resume
+```
+
+See [`HOW_MUCH_TRAINING_IS_ENOUGH.md`](HOW_MUCH_TRAINING_IS_ENOUGH.md) for how to judge
+whether doing this is actually likely to help, based on the loss trend at the point
+training last stopped. If what you actually want is to continue training this checkpoint
+on a *different* dataset (not just more of the same one), see
+[`CONTINUING_TRAINING_ON_NEW_DATA.md`](CONTINUING_TRAINING_ON_NEW_DATA.md) — same resume
+mechanism, but with one hard requirement (the tokenizer must match) that's easy to get
+wrong silently.
 
 ## Diagnosing a bad run
 
