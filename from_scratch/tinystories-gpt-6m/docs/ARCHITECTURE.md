@@ -71,10 +71,16 @@ Confirmed against the real model at runtime: `model.num_parameters()` in
 - **No RoPE, no RMSNorm, no SwiGLU, no GQA** — the modern refinements named in
   [`../../../docs/llm-engineering/10_transformer_architecture.md`'s deep-dive](../../../docs/llm-engineering/10_transformer_architecture.md#deep-dive-why-this-specific-set-of-design-choices-and-what-modern-models-change)
   aren't used here, for the same reason `custom-gpt-153m` doesn't use them: at this
-  scale, with this short a context length, the standard-library `nn.MultiheadAttention` +
-  learned positional embeddings + GELU-MLP + LayerNorm combination is simpler to
-  understand and debug, and isn't the bottleneck holding this project back from its
-  actual goal.
+  scale, with this short a context length, learned positional embeddings + GELU-MLP +
+  LayerNorm are simpler to understand and debug, and aren't the bottleneck holding this
+  project back from its actual goal.
+- **Efficient/fused attention — implemented, not left out.** The original version of this
+  doc listed the standard-library `nn.MultiheadAttention` path as the only option; that's
+  now `ATTN_IMPL=naive`, and `ATTN_IMPL=sdpa`
+  (`F.scaled_dot_product_attention`, fused/flash-eligible kernels) is a real,
+  benchmarked alternative — see
+  [`EFFICIENT_TRAINING.md`](EFFICIENT_TRAINING.md) for the math and real measured
+  numbers on this machine.
 - **No KV cache in the training/inference code** — worth naming explicitly since it's a
   real production concern (`platform-lab/fundamentals/gpu_infrastructure/`'s serving
   chapters cover it in depth): at `context_length=256` and this model size, generation is

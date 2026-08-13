@@ -66,10 +66,22 @@ training loop, and why each piece is there.
 
 | # | Chapter | Status |
 |---|---|---|
-| 12 | The Pretraining Objective & Why Data Dominates | planned |
-| 13 | The Training Loop, Mechanism by Mechanism | planned |
+| 12 | [The Pretraining Objective & Why Data Dominates](12_the_pretraining_objective_and_why_data_dominates.md) | **written** |
+| 13 | [The Training Loop, Mechanism by Mechanism](13_the_training_loop_mechanism_by_mechanism.md) | **written** |
 | 14 | Scaling Laws: Why Bigger Models, and When They Stop Helping | planned |
 | 15 | Evaluating a Model While It's Still Training | planned |
+
+### Part 2B — Training at Scale: Efficiency and Distribution
+
+Appended after the original catalog above rather than inserted between 15 and 16, to avoid
+renumbering already-written chapters — see "Reading order" below for where these actually
+belong in sequence. Both dig into what Part 2's training loop needs once model size, context
+length, or hardware budget stop being "trivially small."
+
+| # | Chapter | Status |
+|---|---|---|
+| 25 | [Efficient Attention: Flash Attention and SDPA](25_efficient_attention_flash_and_sdpa.md) | **written** |
+| 26 | [Distributed Training: DDP, FSDP, and the Parallelism Landscape](26_distributed_training_ddp_and_fsdp.md) | **written** |
 
 ### Part 3 — Fine-Tuning: Adapting an Existing Model
 
@@ -114,6 +126,12 @@ Part 1 (7 → 10), which is LLM-specific vocabulary built on Part 0's general on
 **If you already know standard deep learning (neurons, backprop, gradient descent) and
 want the LLM-specific material**: skip to Part 1 directly, referencing Part 0 chapters
 only if a specific term (e.g., "what exactly is a hyperparameter") needs a refresher.
+
+**If you're following Part 2 (Pretraining) start to finish**: read Part 2B (25 → 26)
+immediately after Part 2's own chapters (12 → 15), despite the higher chapter numbers —
+they were appended after the original catalog to avoid renumbering already-written
+chapters, but belong right after "how the training loop works" in reading order, before
+moving on to Part 3 (Fine-Tuning).
 
 **If you want fine-tuning specifically**: skim Part 1's architecture chapter (10) for
 vocabulary, then go straight to Part 3, run alongside

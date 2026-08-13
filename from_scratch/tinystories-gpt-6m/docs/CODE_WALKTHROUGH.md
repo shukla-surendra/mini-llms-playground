@@ -16,6 +16,14 @@ implementation choices.
 
 ### `CausalSelfAttention`
 
+Implements two interchangeable code paths, selected by the `attn_impl` constructor
+argument (`ATTN_IMPL=naive|sdpa` in `train.py`) — see
+[`EFFICIENT_TRAINING.md`](EFFICIENT_TRAINING.md) for real, measured throughput/memory
+numbers comparing them, and
+[`../../../docs/llm-engineering/25_efficient_attention_flash_and_sdpa.md`](../../../docs/llm-engineering/25_efficient_attention_flash_and_sdpa.md)
+for the general mechanism. Both compute the exact same math; only the naive path is
+covered below in detail since it's the more explicit/readable of the two.
+
 ```python
 self.attn = nn.MultiheadAttention(embed_dim=embed_size, num_heads=num_heads, dropout=dropout, batch_first=True)
 ```
@@ -40,8 +48,10 @@ does the same math but fuses the three projections into one matrix multiply inte
 `nn.Linear` calls. The trade-off: less visible/hackable internals — production
 codebases (nanoGPT, LLaMA reference implementations) typically hand-roll attention
 instead, specifically so they can swap in custom variants (sliding-window attention,
-grouped-query attention). This project deliberately keeps the simpler, standard-library
-path.
+grouped-query attention). The `attn_impl="sdpa"` path in this same class does exactly that
+hand-rolling (manual `in_proj`/`out_proj` `nn.Linear` layers, explicit per-head reshape)
+specifically so it can call `F.scaled_dot_product_attention` directly on already-projected
+tensors — see below.
 
 **The causal mask, exactly**:
 ```python
@@ -54,13 +64,17 @@ after softmax, so that future position contributes exactly zero weight to positi
 output. It's recomputed every forward call (not cached), since `seq_len` differs between
 training (fixed at `context_length`) and generation (grows token by token).
 
-**A real, faster alternative**: `torch.nn.functional.scaled_dot_product_attention`
-(PyTorch 2.0+) has an `is_causal=True` flag that applies this same masking internally
-using fused/flash-attention kernels, meaningfully faster because it never materializes
-the full `seq_len × seq_len` mask matrix in memory — a real cost that grows quadratically
-with sequence length. Production LLMs almost universally use flash-attention-style fused
-kernels for exactly this reason; the explicit mask tensor here is the more
-readable/educational choice, not the fastest one.
+**The faster alternative, actually implemented in this class**:
+`torch.nn.functional.scaled_dot_product_attention`
+(PyTorch 2.0+, `attn_impl="sdpa"`) has an `is_causal=True` flag that applies this same
+masking internally using fused/flash-eligible kernels, never materializing the full
+`seq_len × seq_len` mask matrix in memory — a real cost that grows quadratically with
+sequence length. Production LLMs almost universally use flash-attention-style fused
+kernels for exactly this reason. The explicit mask tensor above (`attn_impl="naive"`,
+still this project's default) remains the more readable/educational path and is what the
+rest of this section explains in detail — but it's no longer the only path this project
+implements; run `ATTN_IMPL=sdpa make train` to use the fused path, and see
+[`EFFICIENT_TRAINING.md`](EFFICIENT_TRAINING.md) for real measured numbers from both.
 
 ### `MLP`
 
@@ -172,6 +186,50 @@ specifically because of the pre-norm design: every block normalizes its own *inp
 its output, so without this final norm the last block's raw, un-normalized output would
 feed directly into `lm_head` — inconsistent with how every other layer received its
 input.
+
+### `num_parameters`, `build_model`, `detect_device`
+
+```python
+def num_parameters(self):
+    return sum(p.numel() for p in self.parameters())
+```
+
+`self.parameters()` recursively walks every submodule and yields each *unique* parameter
+tensor — by object identity, not by name. This matters specifically because of weight tying
+above: `lm_head.weight` and `token_emb.weight` are the same tensor object, so
+`named_parameters()`'s default `remove_duplicate=True` behavior yields it once, and this count
+correctly reflects the model's real unique parameter count rather than double-counting the tied
+matrix.
+
+```python
+def build_model(vocab_size, context_length=256, embed_size=256, num_heads=8, num_layers=6, dropout=0.1):
+    return TinyStoriesGPT(vocab_size=vocab_size, context_length=context_length, ...)
+```
+
+A thin factory wrapping the constructor with the trained checkpoint's actual hyperparameters as
+defaults. The reason this exists rather than every entry point calling `TinyStoriesGPT(...)`
+directly: `train.py`, `inference.py`, and `api_server.py` all import and call `build_model` —
+one place defines "the architecture," so the three entry points can't silently drift apart on
+`embed_size`/`num_heads`/`num_layers` and end up trying to load a checkpoint into a
+differently-shaped model (the exact failure mode the resume-compatibility check below guards
+against from the other direction).
+
+```python
+def detect_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+```
+
+Checks CUDA (NVIDIA) before MPS (Apple Silicon) on purpose: CUDA has broader, more mature
+PyTorch op coverage, so on a machine where both happen to be available, CUDA is the safer
+default. Falls back to `"mps"` on Apple Silicon Macs (relevant for this dev environment
+specifically), and to `"cpu"` when neither GPU backend is present. Note it returns the generic
+`"cuda"` string rather than an indexed `"cuda:0"`/`"cuda:1"` — fine for this project's
+single-GPU training/inference scope, but wouldn't by itself pick a specific device on a
+multi-GPU box.
 
 ## `train.py`
 

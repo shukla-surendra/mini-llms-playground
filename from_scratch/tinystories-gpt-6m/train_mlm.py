@@ -1,14 +1,17 @@
 """
-Training loop for the TinyStories GPT.
+Masked-LM training loop — same conventions as train.py (env-var config, checkpoint
+save/resume, eval-history CSV, cosine LR with warmup) applied to a different pretraining
+objective. See docs/MASKED_LM.md for the masking policy and why loss/perplexity here are
+computed only over masked positions, not the whole sequence (unlike train.py's causal-LM
+loss, which is computed over every position since every position has a real next-token
+target).
 
-Run `python prepare_dataset.py` first. See docs/TRAINING.md for the full explanation of
-every hyperparameter and mechanism here — this file assumes that doc as context and keeps
-inline comments minimal.
+Run `python prepare_dataset.py` first (same tokenized data as train.py — the masked-LM
+objective reuses this project's existing tokenizer and train/val splits unchanged).
 """
 import csv
 import json
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,7 +20,8 @@ import torch
 import torch.nn.functional as F
 from tqdm import trange
 
-from model import build_model, detect_device
+from model import detect_device
+from model_mlm import apply_bert_masking, build_mlm_model
 
 # -------- CONFIG --------
 data_dir = Path(os.getenv("DATA_DIR", "data"))
@@ -26,47 +30,30 @@ embed_size = int(os.getenv("EMBED_SIZE", 256))
 num_heads = int(os.getenv("NUM_HEADS", 8))
 num_layers = int(os.getenv("NUM_LAYERS", 6))
 dropout = float(os.getenv("DROPOUT", 0.1))
+attn_impl = os.getenv("ATTN_IMPL", "naive")
+mask_prob = float(os.getenv("MASK_PROB", 0.15))
 
 batch_size = int(os.getenv("BATCH_SIZE", 32))
 grad_accum_steps = int(os.getenv("GRAD_ACCUM_STEPS", 1))
-attn_impl = os.getenv("ATTN_IMPL", "naive")
-use_amp = os.getenv("AMP", "0") == "1"
-use_grad_checkpoint = os.getenv("GRAD_CHECKPOINT", "0") == "1"
 lr = float(os.getenv("LR", 3e-4))
 min_lr = float(os.getenv("MIN_LR", 3e-5))
 steps = int(os.getenv("STEPS", 5000))
 eval_interval = int(os.getenv("EVAL_INTERVAL", 250))
 eval_batches = int(os.getenv("EVAL_BATCHES", 20))
 save_every_steps = int(os.getenv("SAVE_EVERY_STEPS", 500))
-max_new_tokens = int(os.getenv("MAX_NEW_TOKENS", 120))
 resume_training = os.getenv("RESUME_TRAINING", "1") == "1"
 
 artifact_root = Path(".")
-checkpoint_path = artifact_root / "tinystories_gpt_checkpoint.pt"
-latest_checkpoint_path = artifact_root / "tinystories_gpt_checkpoint_latest.pt"
-best_checkpoint_path = artifact_root / "tinystories_gpt_checkpoint_best.pt"
-eval_history_path = artifact_root / "logs" / "train_eval_history.csv"
+checkpoint_path = artifact_root / "tinystories_mlm_checkpoint.pt"
+latest_checkpoint_path = artifact_root / "tinystories_mlm_checkpoint_latest.pt"
+best_checkpoint_path = artifact_root / "tinystories_mlm_checkpoint_best.pt"
+eval_history_path = artifact_root / "logs" / "train_mlm_eval_history.csv"
 
 device = detect_device()
 if device == "cuda":
     torch.set_float32_matmul_precision("high")
 print(f"[device] using {device}")
-
-# Mixed precision: real fp16 autocast + GradScaler on CUDA, bf16 autocast (no scaler
-# needed — bf16 has fp32's exponent range, just less mantissa, so it doesn't underflow
-# the way fp16 does) on MPS, and a documented no-op on CPU. See docs/EFFICIENT_TRAINING.md
-# for why the mechanism differs per device instead of being one code path.
-amp_dtype = {"cuda": torch.float16, "mps": torch.bfloat16, "cpu": torch.bfloat16}[device]
-amp_enabled = use_amp and device != "cpu"
-if use_amp and device == "cpu":
-    print("[amp] AMP=1 requested but device=cpu — autocast has no meaningful effect "
-          "without a GPU/MPS accelerator; running in full fp32 instead.")
-use_scaler = amp_enabled and device == "cuda"
-scaler = torch.amp.GradScaler(enabled=use_scaler)
-print(f"[amp] enabled={amp_enabled} dtype={amp_dtype if amp_enabled else 'fp32'} "
-      f"grad_scaler={use_scaler}")
-print(f"[attn] impl={attn_impl}")
-print(f"[grad_checkpoint] enabled={use_grad_checkpoint}")
+print(f"[mask] prob={mask_prob}")
 
 
 def load_meta():
@@ -78,12 +65,10 @@ def load_tokens(path):
     return torch.from_numpy(np.fromfile(path, dtype=np.uint16).astype(np.int64))
 
 
-def get_batch(tokens, ctx_len, bsz, device):
-    max_start = len(tokens) - ctx_len - 1
+def get_window(tokens, ctx_len, bsz, device):
+    max_start = len(tokens) - ctx_len
     ix = torch.randint(0, max_start, (bsz,))
-    x = torch.stack([tokens[i:i + ctx_len] for i in ix]).to(device)
-    y = torch.stack([tokens[i + 1:i + ctx_len + 1] for i in ix]).to(device)
-    return x, y
+    return torch.stack([tokens[i:i + ctx_len] for i in ix]).to(device)
 
 
 def lr_for_step(step_idx):
@@ -96,10 +81,6 @@ def lr_for_step(step_idx):
     return min_lr + (lr - min_lr) * cosine
 
 
-def safe_perplexity(loss_value):
-    return float(torch.exp(torch.tensor(min(float(loss_value), 20.0))).item())
-
-
 def append_eval_history(path, row):
     path.parent.mkdir(parents=True, exist_ok=True)
     is_new = not path.exists()
@@ -110,35 +91,35 @@ def append_eval_history(path, row):
         writer.writerow(row)
 
 
-def make_checkpoint_payload(model, optimizer, step, best_val_loss, meta, processed_tokens):
+def make_checkpoint_payload(model, optimizer, step, best_val_loss, meta):
     return {
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "step": step,
         "best_val_loss": best_val_loss,
-        "processed_tokens": processed_tokens,
         "vocab_size": meta["vocab_size"],
         "context_length": context_length,
         "embed_size": embed_size,
         "num_heads": num_heads,
         "num_layers": num_layers,
         "dropout": dropout,
-        "architecture": "tinystories_gpt_decoder_pre_norm_weight_tied",
+        "mask_prob": mask_prob,
+        "architecture": "tinystories_mlm_bidirectional_encoder",
         "tokenizer_path": str(data_dir / "tokenizer.json"),
     }
 
 
 @torch.no_grad()
-def estimate_loss(model, train_tokens, val_tokens, ctx_len, bsz, device):
+def estimate_loss(model, train_tokens, val_tokens, vocab_size, ctx_len, bsz, device):
     model.eval()
     out = {}
     for name, tokens in (("train", train_tokens), ("val", val_tokens)):
         losses = []
         for _ in range(eval_batches):
-            xb, yb = get_batch(tokens, ctx_len, bsz, device)
-            with torch.autocast(device_type=device, dtype=amp_dtype, enabled=amp_enabled):
-                logits = model(xb)
-                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), yb.reshape(-1))
+            window = get_window(tokens, ctx_len, bsz, device)
+            masked_input, labels = apply_bert_masking(window, vocab_size, model.mask_token_id, mask_prob)
+            logits = model(masked_input)
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1), ignore_index=-100)
             losses.append(loss.item())
         out[name] = sum(losses) / len(losses)
     model.train()
@@ -153,7 +134,7 @@ def main():
     val_tokens = load_tokens(data_dir / "val.bin")
     print(f"[data] train_tokens={len(train_tokens):,} val_tokens={len(val_tokens):,}")
 
-    model = build_model(
+    model = build_mlm_model(
         vocab_size=meta["vocab_size"],
         context_length=context_length,
         embed_size=embed_size,
@@ -161,14 +142,12 @@ def main():
         num_layers=num_layers,
         dropout=dropout,
         attn_impl=attn_impl,
-        grad_checkpoint=use_grad_checkpoint,
     ).to(device)
-    print(f"[model] {model.num_parameters():,} parameters")
+    print(f"[model] {model.num_parameters():,} parameters (mask_token_id={model.mask_token_id})")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.1)
     best_val_loss = float("inf")
     start_step = 0
-    processed_tokens = 0
 
     if resume_training and latest_checkpoint_path.exists():
         ckpt = torch.load(latest_checkpoint_path, map_location=device)
@@ -184,7 +163,6 @@ def main():
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             start_step = ckpt.get("step", -1) + 1
             best_val_loss = ckpt.get("best_val_loss", best_val_loss)
-            processed_tokens = ckpt.get("processed_tokens", 0)
             print(f"[resume] resumed from step {start_step}")
         else:
             print("[resume] checkpoint config mismatch, starting fresh")
@@ -197,11 +175,11 @@ def main():
     try:
         for step in range(start_step, steps):
             if step % eval_interval == 0 or step == steps - 1:
-                losses = estimate_loss(model, train_tokens, val_tokens, context_length, batch_size, device)
+                losses = estimate_loss(model, train_tokens, val_tokens, meta["vocab_size"], context_length, batch_size, device)
                 improved = losses["val"] < best_val_loss
                 if improved:
                     best_val_loss = losses["val"]
-                    payload = make_checkpoint_payload(model, optimizer, step, best_val_loss, meta, processed_tokens)
+                    payload = make_checkpoint_payload(model, optimizer, step, best_val_loss, meta)
                     torch.save(payload, best_checkpoint_path)
                     torch.save(payload, checkpoint_path)
                 append_eval_history(eval_history_path, {
@@ -209,27 +187,23 @@ def main():
                     "step": step,
                     "train_loss": f"{losses['train']:.4f}",
                     "val_loss": f"{losses['val']:.4f}",
-                    "val_perplexity": f"{safe_perplexity(losses['val']):.2f}",
                     "best_val_loss": f"{best_val_loss:.4f}",
                     "improved": int(improved),
                 })
                 latest_eval = {"train": f"{losses['train']:.3f}", "val": f"{losses['val']:.3f}"}
 
-            xb, yb = get_batch(train_tokens, context_length, batch_size, device)
-            with torch.autocast(device_type=device, dtype=amp_dtype, enabled=amp_enabled):
-                logits = model(xb)
-                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), yb.reshape(-1))
-            scaler.scale(loss / grad_accum_steps).backward()
+            window = get_window(train_tokens, context_length, batch_size, device)
+            masked_input, labels = apply_bert_masking(window, meta["vocab_size"], model.mask_token_id, mask_prob)
+            logits = model(masked_input)
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1), ignore_index=-100)
+            (loss / grad_accum_steps).backward()
 
             if (step - start_step + 1) % grad_accum_steps == 0 or step == steps - 1:
                 current_lr = lr_for_step(step)
                 for pg in optimizer.param_groups:
                     pg["lr"] = current_lr
-                if use_scaler:
-                    scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
             postfix = {"loss": f"{loss.item():.3f}", "lr": f"{optimizer.param_groups[0]['lr']:.2e}"}
@@ -237,18 +211,17 @@ def main():
                 postfix.update(latest_eval)
             progress.set_postfix(**postfix)
             progress.update(1)
-            processed_tokens += batch_size * context_length
             last_step = step
 
             if (step + 1) % save_every_steps == 0:
-                payload = make_checkpoint_payload(model, optimizer, step, best_val_loss, meta, processed_tokens)
+                payload = make_checkpoint_payload(model, optimizer, step, best_val_loss, meta)
                 torch.save(payload, latest_checkpoint_path)
     except KeyboardInterrupt:
         print("\n[interrupt] saving latest checkpoint...")
     finally:
         progress.close()
 
-    payload = make_checkpoint_payload(model, optimizer, last_step, best_val_loss, meta, processed_tokens)
+    payload = make_checkpoint_payload(model, optimizer, last_step, best_val_loss, meta)
     torch.save(payload, latest_checkpoint_path)
     if not checkpoint_path.exists():
         torch.save(payload, checkpoint_path)

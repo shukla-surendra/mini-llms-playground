@@ -27,6 +27,25 @@ garbage.** That's a narrower, genuinely achievable target, and every design deci
 - **Training**: `train.py` — MPS-first (also runs on CUDA/CPU), with checkpointing,
   resume, and train/val loss tracking. Full mechanism and real, observed MPS performance
   numbers in [`docs/TRAINING.md`](docs/TRAINING.md).
+- **Efficient training**: switchable naive/fused attention (`ATTN_IMPL=naive|sdpa`), mixed
+  precision (`AMP=1`), and gradient checkpointing (`GRAD_CHECKPOINT=1`) — all real flags on
+  `train.py`/`model.py`, benchmarked with actual measured numbers (throughput and memory)
+  in [`docs/EFFICIENT_TRAINING.md`](docs/EFFICIENT_TRAINING.md).
+- **Masked language modeling**: `model_mlm.py` + `train_mlm.py` — a second, bidirectional
+  pretraining objective (BERT-style masked LM) reusing this project's blocks and tokenized
+  data, trained separately from the causal-LM path above. Full explanation and real
+  results in [`docs/MASKED_LM.md`](docs/MASKED_LM.md).
+- **Contrastive self-supervised learning**: `model_contrastive.py` + `train_contrastive.py`
+  — a third pretraining objective (SimCSE-style positive pairs, in-batch-negative InfoNCE
+  loss), built on top of the *unchanged* causal backbone used as a sequence encoder.
+  Full explanation and real results in
+  [`docs/CONTRASTIVE_LEARNING.md`](docs/CONTRASTIVE_LEARNING.md).
+- **Distributed training**: `train_ddp.py` + `train_fsdp.py` — DistributedDataParallel and
+  FullyShardedDataParallel, wrapping the same causal-LM model/data, run for real as
+  multi-process CPU jobs on this machine (`gloo` backend — a mechanism proof, not a
+  GPU-cluster benchmark; two real environment-specific bugs hit and fixed along the way).
+  Full explanation and real results in
+  [`docs/DISTRIBUTED_TRAINING.md`](docs/DISTRIBUTED_TRAINING.md).
 - **Inference**: `inference.py` — command-line text generation from a checkpoint.
 - **API server**: `api_server.py` — FastAPI serving endpoint. Full explanation in
   [`docs/SERVING.md`](docs/SERVING.md).
@@ -121,8 +140,17 @@ on why narrowing the dataset (not just shrinking the model) is what actually mak
   the real alternatives (flash attention, SwiGLU, RoPE, RMSNorm, and more).
 - [`docs/TRAINING.md`](docs/TRAINING.md) — hyperparameters, real MPS throughput numbers,
   resume behavior, how to diagnose a bad run.
+- [`docs/EFFICIENT_TRAINING.md`](docs/EFFICIENT_TRAINING.md) — naive vs. fused (SDPA)
+  attention, mixed precision, and gradient checkpointing, with real measured
+  throughput/memory numbers on this project's own hardware.
 - [`docs/READING_TRAINING_OUTPUT.md`](docs/READING_TRAINING_OUTPUT.md) — the live
   progress-bar output (`loss=`, `lr=`, `train=`, `val=`, `step/s`), decoded term by term.
+- [`docs/MASKED_LM.md`](docs/MASKED_LM.md) — the BERT-style masked-LM objective, why it
+  needed bidirectional attention and a reserved `[MASK]` id, with real training numbers.
+- [`docs/CONTRASTIVE_LEARNING.md`](docs/CONTRASTIVE_LEARNING.md) — SimCSE positive pairs,
+  in-batch-negative InfoNCE, and an honest read of why this setup's task saturates fast.
+- [`docs/DISTRIBUTED_TRAINING.md`](docs/DISTRIBUTED_TRAINING.md) — DDP vs. FSDP, two real
+  environment-specific bugs hit and fixed, and a genuine side-by-side comparison run.
 - [`docs/HOW_MUCH_TRAINING_IS_ENOUGH.md`](docs/HOW_MUCH_TRAINING_IS_ENOUGH.md) — what an
   epoch is, and how to actually decide when to stop training, using this project's real
   evaluation history as the worked example.

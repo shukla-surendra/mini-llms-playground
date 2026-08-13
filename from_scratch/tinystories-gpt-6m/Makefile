@@ -2,7 +2,7 @@ HOST ?= 127.0.0.1
 PORT ?= 8010
 PROMPT ?= Once upon a time,
 
-.PHONY: sync data train train-resume train-fresh infer serve snapshot list-snapshots restore-snapshot publish clean help
+.PHONY: sync data train train-resume train-fresh bench-attention train-amp train-checkpointed train-mlm train-contrastive train-ddp train-fsdp infer serve snapshot list-snapshots restore-snapshot publish clean help
 
 help:
 	@echo "Targets:"
@@ -11,6 +11,13 @@ help:
 	@echo "  make train         - train (resumes automatically if a checkpoint exists)"
 	@echo "  make train-resume  - explicitly resume from tinystories_gpt_checkpoint_latest.pt"
 	@echo "  make train-fresh   - start training from scratch, ignoring any checkpoint"
+	@echo "  make bench-attention - short fresh runs comparing ATTN_IMPL=naive vs sdpa throughput"
+	@echo "  make train-amp     - fresh training run with ATTN_IMPL=sdpa AMP=1"
+	@echo "  make train-checkpointed - fresh training run with ATTN_IMPL=sdpa AMP=1 GRAD_CHECKPOINT=1"
+	@echo "  make train-mlm     - train the masked-LM (BERT-style) objective instead of causal LM"
+	@echo "  make train-contrastive - train the SimCSE-style contrastive/InfoNCE objective"
+	@echo "  make train-ddp WORLD_SIZE=2 - DistributedDataParallel demo (multi-process CPU, gloo)"
+	@echo "  make train-fsdp WORLD_SIZE=2 - FullyShardedDataParallel demo (multi-process CPU, gloo)"
 	@echo "  make infer         - generate a sample from the best checkpoint (PROMPT=... to override)"
 	@echo "  make serve         - start the FastAPI server (HOST=... PORT=... to override)"
 	@echo "  make snapshot NAME=round2-shakespeare  - archive current checkpoints under checkpoints_archive/"
@@ -38,6 +45,38 @@ train-resume: sync
 
 train-fresh: sync
 	RESUME_TRAINING=0 uv run train.py
+
+# See docs/EFFICIENT_TRAINING.md for the real measured numbers these produce.
+bench-attention: sync
+	@echo "--- ATTN_IMPL=naive ---"
+	STEPS=100 EVAL_INTERVAL=1000 SAVE_EVERY_STEPS=1000 RESUME_TRAINING=0 ATTN_IMPL=naive uv run train.py
+	@echo "--- ATTN_IMPL=sdpa ---"
+	STEPS=100 EVAL_INTERVAL=1000 SAVE_EVERY_STEPS=1000 RESUME_TRAINING=0 ATTN_IMPL=sdpa uv run train.py
+
+train-amp: sync
+	ATTN_IMPL=sdpa AMP=1 RESUME_TRAINING=0 uv run train.py
+
+train-checkpointed: sync
+	ATTN_IMPL=sdpa AMP=1 GRAD_CHECKPOINT=1 RESUME_TRAINING=0 uv run train.py
+
+# See docs/MASKED_LM.md — a different pretraining objective (bidirectional, BERT-style),
+# same tokenized data/tokenizer as the causal-LM path above.
+train-mlm: sync
+	uv run train_mlm.py
+
+# See docs/CONTRASTIVE_LEARNING.md — SimCSE-style positive pairs + in-batch-negative
+# InfoNCE, built on the unchanged causal backbone.
+train-contrastive: sync
+	uv run train_contrastive.py
+
+# See docs/DISTRIBUTED_TRAINING.md — multi-process CPU (gloo backend) mechanism demos,
+# not GPU-cluster speed benchmarks. Launched directly (mp.spawn internally, WORLD_SIZE
+# env var), not via torchrun — see that doc's gotcha section for why.
+train-ddp: sync
+	uv run python train_ddp.py
+
+train-fsdp: sync
+	uv run python train_fsdp.py
 
 infer: sync
 	uv run inference.py --prompt "$(PROMPT)"
