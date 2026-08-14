@@ -1,16 +1,13 @@
-# What Is an Epoch, and How Do You Know When to Stop Training?
+# How Much Training Is Enough, in This Project's Own Numbers
 
 Companion to [`TRAINING.md`](TRAINING.md) and
-[`READING_TRAINING_OUTPUT.md`](READING_TRAINING_OUTPUT.md). Both questions in this doc's
-title are answered using this project's own **real, actual training run** — not a
-hypothetical — pulled directly from [`../logs/train_eval_history.csv`](../logs/train_eval_history.csv).
-
-## What Is an Epoch
-
-**One epoch = one full pass through the entire training dataset.** If you have 1,000
-training examples and you've shown the model all 1,000 of them once, that's one epoch,
-regardless of how many gradient-descent steps ([`../../../docs/llm-engineering/03_how_neural_networks_learn.md`](../../../docs/llm-engineering/03_how_neural_networks_learn.md))
-it took to do it.
+[`READING_TRAINING_OUTPUT.md`](READING_TRAINING_OUTPUT.md). What an epoch actually means
+under random-window sampling, and the general four-signal stopping-rule framework, are
+covered in
+[Chapter 15 — Evaluating a Model While It's Still Training](../../../docs/llm-engineering/15_evaluating_a_model_while_training.md).
+This doc applies that framework to this project's own **real, actual training run** — not
+a hypothetical — pulled directly from
+[`../logs/train_eval_history.csv`](../logs/train_eval_history.csv).
 
 ### Converting steps to epochs for this project, with real numbers
 

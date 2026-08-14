@@ -107,6 +107,15 @@ technique for training much larger models than this one on the same hardware.
 - **`torch.compile`** — a real, separate speedup mechanism (kernel fusion via graph
   compilation) that's out of scope here to keep this comparison to exactly the three flags
   named above; a natural next benchmark, not a current gap.
+- **Quantization (e.g. INT8 dynamic quantization)** — deliberately not pursued on this
+  hardware, not merely unbenchmarked. PyTorch's quantization backends
+  (`fbgemm`/`qnnpack`) target CPU inference specifically; there is no equivalent quantized
+  MPS kernel path, so quantizing this model's weights would either silently fall back to
+  CPU execution or add conversion overhead with no matching speedup — the opposite of
+  what the three flags above achieve. This is a genuinely different situation from CUDA,
+  where quantization (and tools like `bitsandbytes`) *is* a real, commonly-used lever;
+  it just isn't one on Apple Silicon today. If that changes (PyTorch's MPS quantization
+  support is actively evolving), this is the first place to re-check.
 
 ## The gotcha: `GRAD_CHECKPOINT=1` needs `model.training=True` to do anything
 

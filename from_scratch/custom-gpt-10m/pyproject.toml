@@ -23,6 +23,7 @@ gpt-train = "gpt.cli.train:main"
 gpt-infer = "gpt.cli.infer:main"
 gpt-serve = "gpt.cli.serve:main"
 gpt-eval = "gpt.cli.evaluate:main"
+gpt-qa-report = "gpt.cli.qa_report:main"
 
 [build-system]
 requires = ["hatchling"]

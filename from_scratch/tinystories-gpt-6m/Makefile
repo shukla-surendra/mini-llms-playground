@@ -2,7 +2,7 @@ HOST ?= 127.0.0.1
 PORT ?= 8010
 PROMPT ?= Once upon a time,
 
-.PHONY: sync data train train-resume train-fresh bench-attention train-amp train-checkpointed train-mlm train-contrastive train-ddp train-fsdp infer serve snapshot list-snapshots restore-snapshot publish clean help
+.PHONY: sync data train train-resume train-fresh bench-attention train-amp train-checkpointed train-mlm train-contrastive train-ddp train-fsdp infer serve test snapshot list-snapshots restore-snapshot publish clean help
 
 help:
 	@echo "Targets:"
@@ -20,6 +20,7 @@ help:
 	@echo "  make train-fsdp WORLD_SIZE=2 - FullyShardedDataParallel demo (multi-process CPU, gloo)"
 	@echo "  make infer         - generate a sample from the best checkpoint (PROMPT=... to override)"
 	@echo "  make serve         - start the FastAPI server (HOST=... PORT=... to override)"
+	@echo "  make test          - run the curated story-prompt set, render an HTML report"
 	@echo "  make snapshot NAME=round2-shakespeare  - archive current checkpoints under checkpoints_archive/"
 	@echo "  make list-snapshots                     - list archived snapshots"
 	@echo "  make restore-snapshot NAME=...           - restore an archived snapshot as the active checkpoint"
@@ -83,6 +84,9 @@ infer: sync
 
 serve: sync
 	uv run uvicorn api_server:app --host $(HOST) --port $(PORT) --reload
+
+test: sync
+	uv run story_report.py
 
 # Archive the current checkpoints + eval log before starting a new dataset round, so you
 # can roll back if the new round hurts quality more than it helps. See

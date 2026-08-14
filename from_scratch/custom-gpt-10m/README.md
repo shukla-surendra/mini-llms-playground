@@ -48,9 +48,8 @@ make serve              # FastAPI server on :8000
 `make data` also includes the gated LMSYS-Chat-1M set and needs `HF_TOKEN`; see
 [docs/DATASETS.md](docs/DATASETS.md).
 
-> Stopping training with Ctrl-C makes `make` print `Error 130`. That is just the
-> interrupt propagating through make — the checkpoint is saved and `make train` resumes
-> from it.
+> Ctrl-C during `make train` is safe — see
+> [Start, stop, and resume training](#start-stop-and-resume-training) below.
 
 ## Choosing a model size
 
@@ -161,6 +160,41 @@ gpt-data --list     # the registry, printed from code
 make audit          # corpus quality gate before a long run
 ```
 
+## Start, stop, and resume training
+
+```bash
+make train                     # start (or resume, if a checkpoint already exists)
+```
+
+```bash
+# stop: press Ctrl-C at any time
+```
+`gpt-train` catches the interrupt, saves `checkpoints/<label>/latest.pt`, and exits —
+`make` then prints `Error 130`, which is just the interrupt signal propagating through
+`make`, not a failed run. The checkpoint from the step you stopped at is already safely
+on disk before that message appears.
+
+```bash
+make train                     # resume: re-run the same command, picks up from latest.pt
+```
+Resuming is the *default* behavior of `make train` — it happens automatically whenever
+`checkpoints/<label>/latest.pt` exists, no flag needed. The resumed run also verifies the
+checkpoint's saved architecture matches the current config before loading, so resuming
+after an accidental preset/override change fails loudly instead of silently corrupting
+the run.
+
+```bash
+make train-fresh               # start over, ignoring any existing checkpoint
+# or, equivalently:
+RESUME_TRAINING=0 make train
+```
+Use this when you deliberately want to discard progress and retrain from step 0 under the
+same label — otherwise `make train` always continues where the last run left off.
+
+See [Chapter 27 — Checkpointing and Resuming Training](../../docs/llm-engineering/27_checkpointing_and_resuming_training.md)
+for why this is safe (atomic saves, self-describing checkpoints) and
+[docs/MIGRATION.md](docs/MIGRATION.md) for resuming on a *different* machine.
+
 ## Checkpoints
 
 Namespaced per model size, so multiple sizes coexist:
@@ -191,9 +225,28 @@ truncated checkpoint behind.
 Loss dropping while the quality score falls usually means data-format noise is hurting
 generation — check `make audit`.
 
+**"Is `steps: int = 1_000_000` the right target, and should I raise it?"** — see
+[docs/TRAINING_SCHEDULE.md](docs/TRAINING_SCHEDULE.md): what `step` actually counts here
+(a micro-batch, not an optimizer update), how it drives the warmup/cosine LR schedule, and
+a three-question framework for telling a real plateau from an artifact of where you are on
+the schedule or noisy eval sampling.
+
+**"Does training for multiple epochs help?" / "Does arranging data in a particular way
+increase model performance?"** — see [docs/TRAINING_QA.md](docs/TRAINING_QA.md): this
+run's actual epoch math (≈2.95 epochs at the configured step budget), and why storage
+order in `train.txt` has zero effect on training (random-window sampling) while the
+`"\n\n"` conversation-boundary separator is a real, currently weak spot.
+
 ## Other docs
 
+- [`../../docs/llm-engineering/`](../../docs/llm-engineering/00_roadmap.md) — the
+  from-first-principles curriculum every concept below links back to
 - [docs/DATASETS.md](docs/DATASETS.md) — every dataset, filter, and the corpus pipeline
 - [docs/API_SERVER.md](docs/API_SERVER.md) — serving endpoints
-- [docs/LLM_DEV_GUIDE.md](docs/LLM_DEV_GUIDE.md) — end-to-end walkthrough of each stage
+- [docs/LLM_DEV_GUIDE.md](docs/LLM_DEV_GUIDE.md) — quickstart map: which curriculum
+  chapter covers each pipeline stage, plus this project's exact command for each
 - [docs/MIGRATION.md](docs/MIGRATION.md) — moving a run between a GPU box and a laptop
+- [docs/TRAINING_SCHEDULE.md](docs/TRAINING_SCHEDULE.md) — what `steps` means, the LR
+  schedule, and judging whether a longer run still helps
+- [docs/TRAINING_QA.md](docs/TRAINING_QA.md) — running log of specific questions asked
+  while training this project's model, answered against its actual code and numbers

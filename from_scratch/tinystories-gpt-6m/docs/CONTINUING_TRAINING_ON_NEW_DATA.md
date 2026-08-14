@@ -87,30 +87,15 @@ versus an already-trained checkpoint — not a different training mechanism.
 
 ### Does it retain previous knowledge? Yes, partially — it's a spectrum, not yes/no
 
-This is a well-documented phenomenon called **catastrophic forgetting**, and the honest
-answer is: **some of it, to a degree that depends on how different the new data is and
-how long you train on it** — not a clean "keeps everything" or "loses everything."
-
-**Why this happens, mechanically**: unlike a system with separate storage per skill, this
-model has exactly one set of weights, and *everything it knows* lives in that one shared
-set ([`../../../docs/llm-engineering/03_how_neural_networks_learn.md`](../../../docs/llm-engineering/03_how_neural_networks_learn.md)).
-Gradient descent has no concept of "this weight matters for TinyStories, protect it" — at
-every step, it moves every weight in whatever direction reduces loss on the *current*
-batch, full stop. If the new dataset's optimal weight values genuinely conflict with
-TinyStories' optimal values (not just "different data," but *pulling weights in a
-different direction*), continued training will erode the TinyStories-specific behavior,
-because nothing in the mechanism is protecting it — this model's limited capacity
-(~5.85M parameters, per [`ARCHITECTURE.md`](ARCHITECTURE.md)) has to represent whatever
-its *most recent* training reinforces.
-
-**What actually determines how much is retained**:
-
-| Factor | Less forgetting | More forgetting |
-|---|---|---|
-| How similar the new data is to TinyStories | Similar (e.g. more simple short stories) | Very different (e.g. code, technical text) |
-| How many steps you train on new data | Few hundred | Many thousand |
-| Whether old data is mixed in | Mixed throughout | New data only, old data never revisited |
-| Learning rate during continuation | Lower (gentler updates) | Same/higher as original training |
+This is a well-documented phenomenon called **catastrophic forgetting** — the honest
+answer is some of it, to a degree that depends on how different the new data is and how
+long you train on it, not a clean "keeps everything" or "loses everything." The full
+mechanism (why gradient descent has no way to protect old-task weights), what determines
+how much is retained, and the general mitigations (replay, lower learning rate, LoRA,
+regularization to a reference model) are covered in
+[Chapter 28 — Catastrophic Forgetting and Continual Training](../../../docs/llm-engineering/28_catastrophic_forgetting_and_continual_training.md).
+This section covers only what's specific to *measuring and mitigating it in this
+project's own code*.
 
 ### You can actually *measure* forgetting, not just worry about it
 
@@ -140,31 +125,15 @@ a problem it actually is for your specific new dataset, rather than relying on t
 guidance above. This turns "would it retain previous knowledge" from a theoretical
 question into something you can answer with a number, for your specific case.
 
-### Two practical mitigations, if retaining TinyStories-style output matters
+### Applying Chapter 28's mitigations here
 
-- **Mix old and new data** (in the continual-learning literature, this is called
-  **replay** or **rehearsal**) rather than switching entirely — e.g., prepare a combined
-  dataset (TinyStories stories + new-dataset examples) rather than training purely on the
-  new data after the switch, so both distributions keep getting reinforced throughout
-  training, not just at the start. This is the single strongest, simplest defense against
-  forgetting — directly counteracting the mechanism described above by never letting the
-  "current batch" be exclusively new-data.
-- **Use a lower learning rate for the continuation phase** — a smaller `LR` means smaller
-  weight updates per step, more gently *nudging* the model toward the new data's patterns
-  rather than aggressively overwriting what it already learned. Per
-  [`../../../docs/llm-engineering/04_hyperparameter_tuning.md`](../../../docs/llm-engineering/04_hyperparameter_tuning.md#which-hyperparameters-actually-matter-most-for-a-transformer),
-  learning rate is the single most sensitive hyperparameter — this is exactly the kind of
-  decision it's worth being deliberate about here.
-
-**Worth knowing exists, out of scope for this project's code**: a whole subfield
-(*continual learning* / *lifelong learning*) studies more sophisticated defenses than
-mixing data — e.g., Elastic Weight Consolidation, which explicitly identifies which
-weights mattered most for old-task performance and penalizes changing them during new
-training. Real, well-studied techniques, genuinely more involved than this project's
-current scope — replay (mixing data) is the practical, easy-to-implement answer here.
-If your actual goal is training on *many* datasets over time, not just switching once,
-see [`CONTINUAL_TRAINING_LOW_RESOURCE.md`](CONTINUAL_TRAINING_LOW_RESOURCE.md) — it
-builds directly on the replay idea here with tooling for mixing from every prior round
+Of Chapter 28's mitigations, **replay** (mixing TinyStories back into the new-data batches)
+and **a lower learning rate for the continuation phase** are the two that apply directly
+to this project's plain full-parameter continuation setup — LoRA and reference-model
+regularization are fine-tuning-specific techniques this project's continued-pretraining
+path doesn't use. If your actual goal is training on *many* datasets over time, not just
+switching once, see [`CONTINUAL_TRAINING_LOW_RESOURCE.md`](CONTINUAL_TRAINING_LOW_RESOURCE.md) —
+it builds directly on the replay idea here with tooling for mixing from every prior round
 (not just the last one) and reversible checkpoints between rounds.
 
 ## When you'd actually want a genuinely new tokenizer instead

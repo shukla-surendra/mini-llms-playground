@@ -73,11 +73,47 @@ make infer
 make serve
 ```
 
-Training auto-resumes from `tinystories_gpt_checkpoint_latest.pt` if present — `Ctrl+C`
-stops safely, `make train-fresh` starts fresh. Run `make help` for every available
-target, including dataset-round snapshots and publishing to the Hugging Face Hub.
-`scripts/workflow.sh` (using `uv run` directly) is also available as a plain-shell
-alternative to the Makefile.
+See [Start, stop, and resume training](#start-stop-and-resume-training) below for the
+full detail. Run `make help` for every available target, including dataset-round
+snapshots and publishing to the Hugging Face Hub. `scripts/workflow.sh` (using `uv run`
+directly) is also available as a plain-shell alternative to the Makefile.
+
+## Start, stop, and resume training
+
+```bash
+make train                     # start (or resume, if a checkpoint already exists)
+```
+
+```bash
+# stop: press Ctrl-C at any time
+```
+`train.py` catches the interrupt, saves `tinystories_gpt_checkpoint_latest.pt`, and
+exits — the checkpoint from the step you stopped at is safely on disk before the process
+returns control to the shell.
+
+```bash
+make train                     # resume: re-run the same command, picks up from latest.pt
+# or, to make the intent explicit:
+make train-resume
+```
+Resuming is the *default* behavior of `make train` — it happens automatically whenever
+`tinystories_gpt_checkpoint_latest.pt` exists, no flag needed. The resumed run also
+verifies the checkpoint's saved hyperparameters match the current config before loading,
+so resuming after an accidental config change fails loudly instead of silently
+corrupting the run.
+
+```bash
+make train-fresh               # start over, ignoring any existing checkpoint
+# or, equivalently:
+RESUME_TRAINING=0 uv run train.py
+```
+Use this when you deliberately want to discard progress and retrain from step 0 —
+otherwise `make train` always continues where the last run left off.
+
+See [Chapter 27 — Checkpointing and Resuming Training](../../docs/llm-engineering/27_checkpointing_and_resuming_training.md)
+for why this is safe (atomic saves, self-describing checkpoints), and
+[docs/CONTINUAL_TRAINING_LOW_RESOURCE.md](docs/CONTINUAL_TRAINING_LOW_RESOURCE.md) for
+snapshotting a checkpoint before a new training round so a bad round can be rolled back.
 
 ## Real results from this project's own training run
 
@@ -168,8 +204,8 @@ on why narrowing the dataset (not just shrinking the model) is what actually mak
   (`scripts/upload_to_hf.py`), and the real model card ([`model_card.md`](model_card.md)).
 - [`docs/SERVING.md`](docs/SERVING.md) — how generation and the API server work, and what
   production-serving concerns are deliberately out of scope at this size.
-- [`docs/TEMPERATURE_AND_SAMPLING.md`](docs/TEMPERATURE_AND_SAMPLING.md) — what
-  temperature is and exactly how it reshapes the output distribution, with a worked
-  numerical example.
+- [`docs/TEMPERATURE_AND_SAMPLING.md`](docs/TEMPERATURE_AND_SAMPLING.md) — this project's
+  default sampling values and practical guidance for its `/generate` endpoint (the math
+  itself is in the curriculum's [Chapter 21](../../docs/llm-engineering/21_inference_mechanics_decoding_sampling_and_kv_cache.md)).
 - [`../../docs/llm-engineering/`](../../docs/llm-engineering/00_roadmap.md) — the
   from-first-principles curriculum every concept above links back to.

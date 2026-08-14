@@ -27,9 +27,9 @@ polished output quality.
 | Doc | Covers |
 |---|---|
 | [`README.md`](../from_scratch/custom-gpt-153m/README.md) | Architecture, parameter-count breakdown, quickstart, dataset prep, training/resume flow, Colab compatibility |
-| [`docs/LLM_DEV_GUIDE.md`](../from_scratch/custom-gpt-153m/docs/LLM_DEV_GUIDE.md) | Beginner-friendly, end-to-end walkthrough of every stage (data → tokenize → train → infer → evaluate) and why each piece exists |
-| [`docs/API_SERVER.md`](../from_scratch/custom-gpt-153m/docs/API_SERVER.md) | Running and calling the FastAPI serving endpoint |
-| [`docs/MIGRATION.md`](../from_scratch/custom-gpt-153m/docs/MIGRATION.md) | Moving a training run between a cloud GPU machine and a local Mac (checkpoint sync, resume) |
+| [`docs/LLM_DEV_GUIDE.md`](../from_scratch/custom-gpt-153m/docs/LLM_DEV_GUIDE.md) | Quickstart map: which [`llm-engineering/`](llm-engineering/00_roadmap.md) chapter covers each pipeline stage (data → tokenize → train → checkpoint → infer → serve), plus this project's exact command for each |
+| [`docs/API_SERVER.md`](../from_scratch/custom-gpt-153m/docs/API_SERVER.md) | Running and calling the FastAPI serving endpoint (mechanism: [Chapter 22](llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)) |
+| [`docs/MIGRATION.md`](../from_scratch/custom-gpt-153m/docs/MIGRATION.md) | Moving a training run between a cloud GPU machine and a local Mac (checkpoint sync, resume; mechanism: [Chapter 27](llm-engineering/27_checkpointing_and_resuming_training.md)) |
 
 ### [`custom-gpt-10m`](../from_scratch/custom-gpt-10m/)
 
@@ -43,7 +43,11 @@ target.
 
 | Doc | Covers |
 |---|---|
-| [`README.md`](../from_scratch/custom-gpt-10m/README.md) | Parameter-count breakdown for the shrunk config, `uv`/`make`-based quickstart, everything else inherited from `custom-gpt-153m`'s docs |
+| [`README.md`](../from_scratch/custom-gpt-10m/README.md) | Parameter-count breakdown for the shrunk config, `uv`/`make`-based quickstart |
+| [`docs/DATASETS.md`](../from_scratch/custom-gpt-10m/docs/DATASETS.md) | The five-source corpus, filters, and the raw-data-to-`train.txt` pipeline |
+| [`docs/LLM_DEV_GUIDE.md`](../from_scratch/custom-gpt-10m/docs/LLM_DEV_GUIDE.md) | Quickstart map: which [`llm-engineering/`](llm-engineering/00_roadmap.md) chapter covers each pipeline stage, plus this project's exact command for each |
+| [`docs/API_SERVER.md`](../from_scratch/custom-gpt-10m/docs/API_SERVER.md) | Running and calling the FastAPI serving endpoint (mechanism: [Chapter 22](llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)) |
+| [`docs/MIGRATION.md`](../from_scratch/custom-gpt-10m/docs/MIGRATION.md) | Moving a training run between a cloud GPU machine and a local Mac (mechanism: [Chapter 27](llm-engineering/27_checkpointing_and_resuming_training.md)) |
 
 ### [`tinystories-gpt-6m`](../from_scratch/tinystories-gpt-6m/)
 
@@ -58,7 +62,7 @@ Apple Silicon MPS) and genuinely coherent output, not maximal scale.
 | [`docs/DATASET_AND_TOKENIZER.md`](../from_scratch/tinystories-gpt-6m/docs/DATASET_AND_TOKENIZER.md) | Why TinyStories, why a custom small vocabulary instead of GPT-2's |
 | [`docs/ARCHITECTURE.md`](../from_scratch/tinystories-gpt-6m/docs/ARCHITECTURE.md) | Every sizing decision, full parameter-count derivation |
 | [`docs/TRAINING.md`](../from_scratch/tinystories-gpt-6m/docs/TRAINING.md) | Hyperparameters, real MPS throughput, resume, diagnosing a bad run |
-| [`docs/SERVING.md`](../from_scratch/tinystories-gpt-6m/docs/SERVING.md) | Inference and API server, what's deliberately out of scope at this size |
+| [`docs/SERVING.md`](../from_scratch/tinystories-gpt-6m/docs/SERVING.md) | Inference and API server, what's deliberately out of scope at this size (mechanism: [Chapters 21](llm-engineering/21_inference_mechanics_decoding_sampling_and_kv_cache.md)-[22](llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)) |
 
 ## Fine-tuning track
 

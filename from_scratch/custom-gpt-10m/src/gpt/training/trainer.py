@@ -8,13 +8,14 @@ with gradient accumulation so a batch_size of 1 still yields a large effective b
 import csv
 from datetime import datetime, timezone
 import math
+import os
 import time
 
 import tiktoken
 import torch
 from tqdm import trange
 
-from ..checkpoint import atomic_save, is_compatible, make_payload
+from ..checkpoint import atomic_save, is_compatible, make_payload, remap_attn_impl
 from ..config import TOKENIZER_NAME
 from ..data import (
     effective_context_length,
@@ -114,12 +115,13 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
             f"to fit the available corpus."
         )
 
-    model = TinyGPT.from_config(model_cfg, context_length=ctx_len).to(device)
+    attn_impl = os.getenv("ATTN_IMPL", "naive")
+    model = TinyGPT.from_config(model_cfg, context_length=ctx_len, attn_impl=attn_impl).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
     )
 
-    print(f"Model: {label}  |  {model.param_count():,} parameters  |  device={device}")
+    print(f"Model: {label}  |  {model.param_count():,} parameters  |  device={device}  |  attn_impl={attn_impl}")
     print(f"Train tokens: {len(train_tokens):,}  Test tokens: {len(test_tokens):,}")
     print(f"Checkpoints: {paths.checkpoint_dir}/")
 
@@ -176,7 +178,19 @@ def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device):
         )
         return
 
-    model.load_state_dict(checkpoint["model_state_dict"])
+    checkpoint_attn_impl = checkpoint.get("attn_impl", "naive")
+    model_state_dict = checkpoint["model_state_dict"]
+    if checkpoint_attn_impl != model.attn_impl:
+        print(
+            f"Checkpoint was trained with attn_impl={checkpoint_attn_impl!r}, current "
+            f"run uses attn_impl={model.attn_impl!r} — remapping attention weights "
+            f"(same values, different parameter names; see checkpoint.remap_attn_impl)."
+        )
+        model_state_dict = remap_attn_impl(
+            model_state_dict, num_layers=model_cfg.num_layers,
+            from_impl=checkpoint_attn_impl, to_impl=model.attn_impl,
+        )
+    model.load_state_dict(model_state_dict)
     if "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     state["start_step"] = int(checkpoint.get("step", -1)) + 1
@@ -194,7 +208,16 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
     def elapsed():
         return state["total_training_seconds"] + (time.time() - run_start)
 
-    def payload(step):
+    # Bug fix note: `state["total_training_seconds"]` must stay fixed at its
+    # resume-time value for as long as elapsed() may still be called — mutating it
+    # mid-function and then calling elapsed() again double-counts the current
+    # session's duration (elapsed() would add (time.time() - run_start) on top of a
+    # value that already includes that same delta). The final-save code below
+    # therefore computes elapsed() exactly once into a local variable and passes it
+    # explicitly to every payload() call from that point on, rather than mutating
+    # `state` first and letting payload()'s default elapsed() recompute it.
+
+    def payload(step, total_training_seconds=None):
         return make_payload(
             model=model,
             optimizer=optimizer,
@@ -204,7 +227,13 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
             step=step,
             best_test_loss=state["best_test_loss"],
             processed_tokens=state["processed_tokens"],
-            total_training_seconds=elapsed(),
+            # Mid-loop periodic saves want the live value (state["total_training_seconds"]
+            # is still the fixed value loaded at resume, so elapsed() == correct-so-far).
+            # The final save(s) after the loop pass an already-computed, frozen value
+            # instead — see the fix note below `elapsed()`'s definition for why.
+            total_training_seconds=(
+                elapsed() if total_training_seconds is None else total_training_seconds
+            ),
             label=label,
         )
 
@@ -281,10 +310,11 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
         print("\nInterrupted — saving a resumable checkpoint...")
     finally:
         progress.close()
-        state["total_training_seconds"] = elapsed()
 
+    final_total_seconds = elapsed()  # single source of truth from here on — see note above
+    state["total_training_seconds"] = final_total_seconds
     final_step = max(last_step, start_step - 1)
-    atomic_save(payload(final_step), paths.latest_checkpoint)
+    atomic_save(payload(final_step, total_training_seconds=final_total_seconds), paths.latest_checkpoint)
 
     if interrupted:
         print(f"Saved: {paths.latest_checkpoint}")
@@ -293,7 +323,7 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
         return {"interrupted": True, "step": final_step,
                 "best_test_loss": state["best_test_loss"]}
 
-    completed = payload(max(final_step, train_cfg.steps - 1))
+    completed = payload(max(final_step, train_cfg.steps - 1), total_training_seconds=final_total_seconds)
     atomic_save(completed, paths.final_checkpoint)
     atomic_save(completed, paths.latest_checkpoint)
     if not paths.serving_checkpoint.exists():

@@ -76,10 +76,12 @@ Identical mechanism to
 [`../../custom-gpt-153m/docs/MIGRATION.md`](../../custom-gpt-153m/docs/MIGRATION.md)'s
 approach: `train.py` writes `tinystories_gpt_checkpoint_latest.pt` every
 `SAVE_EVERY_STEPS` steps and on `Ctrl+C`, and checks saved hyperparameters against the
-current run's config before resuming (see
-[`../../../docs/llm-engineering/02_parameters_vs_hyperparameters.md`'s explanation of why
-this check exists](../../../docs/llm-engineering/02_parameters_vs_hyperparameters.md#try-it-yourself)).
-Resume by simply re-running `python train.py` — `RESUME_TRAINING=0` forces a fresh start.
+current run's config before resuming — the general mechanism (why checkpoints need to be
+self-describing, why this check exists, atomic saves) is
+[Chapter 27 — Checkpointing and Resuming Training](../../../docs/llm-engineering/27_checkpointing_and_resuming_training.md);
+[Chapter 2](../../../docs/llm-engineering/02_parameters_vs_hyperparameters.md#try-it-yourself)
+covers the same check from the parameters-vs-hyperparameters angle. Resume by simply
+re-running `python train.py` — `RESUME_TRAINING=0` forces a fresh start.
 
 ### The gotcha: resuming doesn't automatically train further past `STEPS`
 

@@ -1,9 +1,12 @@
 # Continual Training Across Many Datasets, No GPU Required
 
 Companion to [`CONTINUING_TRAINING_ON_NEW_DATA.md`](CONTINUING_TRAINING_ON_NEW_DATA.md)
-(which covers switching to *one* new dataset) — this doc is for the broader goal: **keep
-training the same model, indefinitely, across a growing sequence of different datasets,
-on a machine with no GPU**, without your setup getting harder to manage as the number of
+(which covers switching to *one* new dataset) and
+[Chapter 28 — Catastrophic Forgetting and Continual Training](../../../docs/llm-engineering/28_catastrophic_forgetting_and_continual_training.md)
+(the general mechanism and mitigations, including why replay needs to draw from *every*
+prior round, not just the last one) — this doc is for the broader goal: **keep training
+the same model, indefinitely, across a growing sequence of different datasets, on a
+machine with no GPU**, without your setup getting harder to manage as the number of
 datasets grows.
 
 ## Why this is actually a good fit for this project's constraints, not a limitation

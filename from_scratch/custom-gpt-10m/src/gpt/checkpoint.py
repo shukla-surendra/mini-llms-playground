@@ -47,6 +47,11 @@ def make_payload(model, optimizer, model_cfg, train_cfg, context_length, step,
         "dropout": model_cfg.dropout,
         "preset_label": label,
         "param_count": model.param_count(),
+        # Which attention kernel this state_dict's parameter names/shapes match —
+        # "naive" (nn.MultiheadAttention) and "sdpa" (plain in_proj/out_proj Linear
+        # layers) hold numerically-equivalent weights but under different key names,
+        # so load_model/remap_attn_impl need this to rebuild the matching structure.
+        "attn_impl": getattr(model, "attn_impl", "naive"),
         # Provenance.
         "grad_accum_steps": train_cfg.grad_accum_steps,
         "batch_size": train_cfg.batch_size,
@@ -54,6 +59,52 @@ def make_payload(model, optimizer, model_cfg, train_cfg, context_length, step,
         "architecture": "gpt_decoder_pre_norm_weight_tied",
         "training_objective": "raw_next_token_prediction",
     }
+
+
+def remap_attn_impl(state_dict, num_layers, from_impl, to_impl):
+    """Rename attention parameter keys between the "naive" and "sdpa" CausalSelfAttention
+    implementations, so weights trained under one load correctly under the other.
+
+    The two implementations hold numerically-identical parameters (same shapes, same
+    values) but organize them under different module paths:
+      naive: blocks.<i>.attn.attn.in_proj_weight / .in_proj_bias
+             blocks.<i>.attn.attn.out_proj.weight / .out_proj.bias
+      sdpa:  blocks.<i>.attn.in_proj.weight / .in_proj.bias
+             blocks.<i>.attn.out_proj.weight / .out_proj.bias
+    This is a pure key rename (no reshape/transpose) — nn.MultiheadAttention's internal
+    in_proj_weight is already a plain (3*embed_size, embed_size) matrix, identical in
+    shape and meaning to a fused nn.Linear(embed_size, 3*embed_size).weight.
+    """
+    if from_impl == to_impl:
+        return state_dict
+    if {from_impl, to_impl} != {"naive", "sdpa"}:
+        raise ValueError(f"Unsupported remap: {from_impl!r} -> {to_impl!r}")
+
+    if from_impl == "naive":
+        rename = {
+            "attn.attn.in_proj_weight": "attn.in_proj.weight",
+            "attn.attn.in_proj_bias": "attn.in_proj.bias",
+            "attn.attn.out_proj.weight": "attn.out_proj.weight",
+            "attn.attn.out_proj.bias": "attn.out_proj.bias",
+        }
+    else:
+        rename = {
+            "attn.in_proj.weight": "attn.attn.in_proj_weight",
+            "attn.in_proj.bias": "attn.attn.in_proj_bias",
+            "attn.out_proj.weight": "attn.attn.out_proj.weight",
+            "attn.out_proj.bias": "attn.attn.out_proj.bias",
+        }
+
+    remapped = {}
+    for key, value in state_dict.items():
+        new_key = key
+        for i in range(num_layers):
+            for old_suffix, new_suffix in rename.items():
+                old = f"blocks.{i}.{old_suffix}"
+                if key == old:
+                    new_key = f"blocks.{i}.{new_suffix}"
+        remapped[new_key] = value
+    return remapped
 
 
 def load_model(checkpoint_path, device, eval_mode=True):
@@ -79,6 +130,7 @@ def load_model(checkpoint_path, device, eval_mode=True):
         num_heads=checkpoint["num_heads"],
         num_layers=checkpoint["num_layers"],
         dropout=checkpoint.get("dropout", 0.0),
+        attn_impl=checkpoint.get("attn_impl", "naive"),
     ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     if eval_mode:

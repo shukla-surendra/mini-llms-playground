@@ -69,19 +69,24 @@ training loop, and why each piece is there.
 | 12 | [The Pretraining Objective & Why Data Dominates](12_the_pretraining_objective_and_why_data_dominates.md) | **written** |
 | 13 | [The Training Loop, Mechanism by Mechanism](13_the_training_loop_mechanism_by_mechanism.md) | **written** |
 | 14 | Scaling Laws: Why Bigger Models, and When They Stop Helping | planned |
-| 15 | Evaluating a Model While It's Still Training | planned |
+| 15 | [Evaluating a Model While It's Still Training](15_evaluating_a_model_while_training.md) | **written** |
 
-### Part 2B — Training at Scale: Efficiency and Distribution
+### Part 2B — Training at Scale: Efficiency, Distribution, and Continuity
 
 Appended after the original catalog above rather than inserted between 15 and 16, to avoid
 renumbering already-written chapters — see "Reading order" below for where these actually
-belong in sequence. Both dig into what Part 2's training loop needs once model size, context
-length, or hardware budget stop being "trivially small."
+belong in sequence. All four dig into what Part 2's training loop needs once model size,
+context length, hardware budget, or run duration stop being "trivially small": 25-26 cover
+scaling a single run's efficiency and distributing it across processes; 27-28 cover what a
+run needs to survive interruption and repeated/sequential training without silently
+corrupting or forgetting what it already learned.
 
 | # | Chapter | Status |
 |---|---|---|
 | 25 | [Efficient Attention: Flash Attention and SDPA](25_efficient_attention_flash_and_sdpa.md) | **written** |
 | 26 | [Distributed Training: DDP, FSDP, and the Parallelism Landscape](26_distributed_training_ddp_and_fsdp.md) | **written** |
+| 27 | [Checkpointing and Resuming Training](27_checkpointing_and_resuming_training.md) | **written** |
+| 28 | [Catastrophic Forgetting and Continual Training](28_catastrophic_forgetting_and_continual_training.md) | **written** |
 
 ### Part 3 — Fine-Tuning: Adapting an Existing Model
 
@@ -97,6 +102,20 @@ and the wider landscape of techniques it's one instance of.
 | 19 | [RLHF, DPO, and Preference Optimization](19_rlhf_and_dpo.md) | **written** |
 | 20 | [Evaluating a Fine-Tuned Model](20_evaluating_a_fine_tuned_model.md) | **written** |
 
+### Part 3B — Distillation: Compressing a Larger Model Into a Smaller One
+
+Appended after the original catalog, same reason as Part 2B: avoids renumbering
+already-written chapters. Belongs right after Part 3 (Fine-Tuning) in reading order — see
+"Reading order" below. Covers training a smaller **student** model to imitate a larger
+**teacher** model's outputs, including the practical, licensing-aware recipe for using a
+popular hosted model (Claude, GPT, etc.) — or, with zero terms-of-service exposure, one of
+this repo's own `base_models/` checkpoints — as that teacher.
+
+| # | Chapter | Status |
+|---|---|---|
+| 32 | [Knowledge Distillation, Mechanism by Mechanism](32_knowledge_distillation_mechanism_by_mechanism.md) | **written** |
+| 33 | [Distilling Production Models Into a Local Model (Claude, GPT, and Other Popular Teachers)](33_distilling_production_models_into_a_local_model.md) | **written** |
+
 ### Part 4 — Serving: Turning a Trained Model Into Something You Can Talk To
 
 What actually happens inside
@@ -106,9 +125,14 @@ generalizes to production-scale serving.
 
 | # | Chapter | Status |
 |---|---|---|
-| 21 | Inference Mechanics: Decoding, Sampling, and KV Cache | planned |
-| 22 | From Script to API: Serving a Model for Real | planned |
+| 21 | [Inference Mechanics: Decoding, Sampling, and KV Cache](21_inference_mechanics_decoding_sampling_and_kv_cache.md) | **written** |
+| 22 | [From Script to API: Serving a Model for Real](22_from_script_to_api_serving_a_model_for_real.md) | **written** |
 | 23 | The Serving-Engine Ecosystem (vLLM and Friends) | planned |
+| 31 | [Publishing a Model: The Hugging Face Hub Workflow](31_publishing_a_model_the_hugging_face_hub_workflow.md) | **written** |
+
+Chapter 31 is numbered out of sequence for the same reason Part 2B's chapters are — appended
+after the original catalog to avoid renumbering, but belongs here in reading order: what to
+do with a trained checkpoint once serving (21-22) is understood.
 
 ### Part 5 — The Practical Toolkit
 
@@ -127,7 +151,7 @@ Part 1 (7 → 10), which is LLM-specific vocabulary built on Part 0's general on
 want the LLM-specific material**: skip to Part 1 directly, referencing Part 0 chapters
 only if a specific term (e.g., "what exactly is a hyperparameter") needs a refresher.
 
-**If you're following Part 2 (Pretraining) start to finish**: read Part 2B (25 → 26)
+**If you're following Part 2 (Pretraining) start to finish**: read Part 2B (25 → 28)
 immediately after Part 2's own chapters (12 → 15), despite the higher chapter numbers —
 they were appended after the original catalog to avoid renumbering already-written
 chapters, but belong right after "how the training loop works" in reading order, before
@@ -138,10 +162,21 @@ vocabulary, then go straight to Part 3, run alongside
 [`fine_tuning/tinyllama-1.1b-lora/`](../../fine_tuning/tinyllama-1.1b-lora/)'s training
 script.
 
-**If your question is "how do I actually serve this to users"**: Part 4, and for
-anything beyond a single local machine, continue into `platform-lab/fundamentals/
-gpu_infrastructure/`'s Phase 5 (LLM Serving) chapters, which this curriculum's Part 4
-hands off to explicitly.
+**If you want to build a local model from a stronger model's outputs (distillation)**:
+read Part 3B (32 → 33) right after Part 3's own chapters (16 → 20), despite the higher
+chapter numbers — appended after the original catalog to avoid renumbering, but belongs
+right after fine-tuning in reading order. Chapter 33 covers the terms-of-service question
+before the pipeline itself — read that section even if you skip the rest.
+
+**If your question is "how do I actually serve this to users"**: Part 4 (21 → 22, then 31
+for publishing the trained checkpoint itself), and for anything beyond a single local
+machine, continue into `platform-lab/fundamentals/gpu_infrastructure/`'s Phase 5 (LLM
+Serving) chapters, which this curriculum's Part 4 hands off to explicitly.
+
+**If you're resuming, continuing, or repeating training runs**: 27 (checkpointing
+mechanics) and 28 (forgetting/continual training) apply regardless of which Part you're
+otherwise reading — they're relevant the moment a run is interrupted, resumed, or pointed
+at new data after already having trained on something else.
 
 ## Chapter house style
 

@@ -1,4 +1,4 @@
-.PHONY: help setup config presets data data-public audit train train-fresh infer serve eval clean
+.PHONY: help setup config presets data data-public audit train train-fresh infer serve eval test clean
 
 help:
 	@echo "custom-gpt — targets:"
@@ -16,11 +16,18 @@ help:
 	@echo "  make infer         # generate from the trained checkpoint"
 	@echo "  make serve         # FastAPI server on :8000"
 	@echo "  make eval          # heuristic generation-quality report"
+	@echo "  make test          # run the curated QA prompt set, render an HTML report"
 	@echo "  make clean         # remove checkpoints and logs (data/ is left alone)"
 	@echo ""
 	@echo "Change model size (no code edits):"
 	@echo "  GPT_PRESET=30m make train"
 	@echo "  GPT_EMBED_SIZE=192 GPT_NUM_LAYERS=8 make train"
+	@echo ""
+	@echo "Attention kernel (same math, different memory-access pattern — see"
+	@echo "docs/llm-engineering/25_efficient_attention_flash_and_sdpa.md):"
+	@echo "  ATTN_IMPL=sdpa make train    # F.scaled_dot_product_attention (default: naive)"
+	@echo "  Resuming across a different ATTN_IMPL than the checkpoint was saved with"
+	@echo "  remaps weights automatically — no progress lost, see checkpoint.remap_attn_impl."
 
 setup:
 	uv sync
@@ -54,6 +61,9 @@ serve: setup
 
 eval: setup
 	uv run gpt-eval
+
+test: setup
+	uv run gpt-qa-report
 
 clean:
 	rm -rf checkpoints logs

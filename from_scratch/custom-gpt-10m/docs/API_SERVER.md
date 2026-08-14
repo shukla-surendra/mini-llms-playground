@@ -1,5 +1,15 @@
 # FastAPI Serving Guide
 
+## The mechanism (nothing new here)
+
+`api_server.py` is a thin FastAPI wrapper around the exact same generation loop
+`inference.py` uses — see
+[Chapter 22 — From Script to API](../../../docs/llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)
+for why the wrapper is this thin, and
+[Chapter 21 — Inference Mechanics](../../../docs/llm-engineering/21_inference_mechanics_decoding_sampling_and_kv_cache.md)
+for what `temperature`/`top_k`/`top_p`/`repetition_penalty` below actually do. This doc
+only covers what's specific to this project's serving setup.
+
 ## 1) Start server
 
 ```bash

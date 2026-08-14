@@ -1,22 +1,11 @@
 # Publishing This Model to the Hugging Face Hub
 
-Covers [`scripts/upload_to_hf.py`](../scripts/upload_to_hf.py) — what it uploads, why
-each file is there, and how to actually get a token and verify the upload afterward.
-
-## Why this isn't a one-line `push_to_hub()` call
-
-`transformers`-library models get a convenient `model.push_to_hub()` because they're
-built on that library's standard classes (`AutoModelForCausalLM`, etc.), which know how
-to serialize themselves in a format the Hub's ecosystem understands automatically. This
-project's `TinyStoriesGPT` (per
-[`CODE_WALKTHROUGH.md`](CODE_WALKTHROUGH.md#tinystoriesgpt)) is a plain, custom
-`nn.Module` — nothing about it is `transformers`-aware. Publishing it means uploading the
-raw pieces someone needs to reconstruct and run it themselves: the trained weights, the
-exact tokenizer it was trained with, and the model-definition code — the same "raw files"
-approach [`../../custom-gpt-153m/scripts/upload_to_hf.py`](../../custom-gpt-153m/scripts/upload_to_hf.py)
-already uses for the sibling project, extended here with the tokenizer file that project
-never needed (it reuses GPT-2's public tokenizer, per
-[`DATASET_AND_TOKENIZER.md`](DATASET_AND_TOKENIZER.md); this project trains its own).
+Covers [`scripts/upload_to_hf.py`](../scripts/upload_to_hf.py) — what it uploads, and how
+to actually get a token and verify the upload afterward. Why a custom model needs a raw-
+files upload instead of `push_to_hub()`, and what makes a model card genuinely
+self-contained, are covered in
+[Chapter 31 — Publishing a Model: The Hugging Face Hub Workflow](../../../docs/llm-engineering/31_publishing_a_model_the_hugging_face_hub_workflow.md).
+This doc covers only this project's exact file list, token setup, and verification steps.
 
 ## What gets uploaded, and why each file matters
 
@@ -70,17 +59,13 @@ uv run scripts/upload_to_hf.py --repo-id your-username/tinystories-gpt-6m
 
 ## The model card (`model_card.md` → `README.md` on the Hub)
 
-This is a separate, real HF-formatted model card (YAML frontmatter with `license`,
-`tags`, `datasets`, `pipeline_tag` — the metadata HF's site uses for search/filtering and
-the auto-rendered widget), **not** a copy of this project's own `README.md`. The project
-README is written for someone browsing the GitHub repo (relative links to `docs/`,
-repo-navigation content); the model card is written for someone landing directly on the
-HF model page with none of that context — it includes real training results (the actual
-loss/perplexity numbers and a real generated sample, not placeholders) and a
-self-contained usage snippet that downloads and runs the model with no other context
-needed. Edit [`../model_card.md`](../model_card.md) directly if you want to change what
-appears on the model page — it's a real file in this repo, not generated inline by the
-script.
+A separate, real HF-formatted model card (YAML frontmatter with `license`, `tags`,
+`datasets`, `pipeline_tag`) — **not** a copy of this project's own `README.md`; see
+Chapter 31 for why those two documents have to diverge. Edit
+[`../model_card.md`](../model_card.md) directly if you want to change what appears on the
+model page — it's a real file in this repo, not generated inline by the script. It
+includes this project's actual loss/perplexity numbers and a real generated sample, not
+placeholders.
 
 ## Verifying it worked
 

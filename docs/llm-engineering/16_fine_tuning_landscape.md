@@ -83,6 +83,16 @@ These four aren't tiers where one is strictly "better" — they solve different 
   hardware?** PEFT (LoRA) — the sweet spot this curriculum's own fine-tuning projects
   both use.
 
+### Related but distinct: distillation is about *where the data comes from*, not which weights move
+
+The four levers above are one axis: how much of the model gets touched. **Distillation**
+([Chapter 32](32_knowledge_distillation_mechanism_by_mechanism.md)) is a different axis
+entirely: it's about *where the training targets come from* — a stronger model's outputs,
+rather than human-written data — and can be combined with any of the four levers above
+(most commonly full fine-tuning or PEFT, applied to teacher-generated data instead of, or
+alongside, human-collected data). Don't treat it as a fifth item in this list; it answers a
+different question.
+
 ## Grounded in This Repo's Code
 
 Both fine-tuning projects in this repo are **PEFT**, specifically **LoRA**, not full

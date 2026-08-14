@@ -2,6 +2,12 @@
 
 Use this when you train on a cloud GPU for some time, then continue on Mac (MPS/CPU), or switch back.
 
+Why this works at all — checkpoints are self-describing and device-portable via
+`map_location`, so moving one between machines is a file-copy problem, not a code
+problem — is covered in
+[Chapter 27 — Checkpointing and Resuming Training](../../../docs/llm-engineering/27_checkpointing_and_resuming_training.md).
+This doc only covers the exact files, commands, and checklist specific to this project.
+
 ## What is supported
 
 - Sequential resume across machines: supported.

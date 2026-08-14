@@ -43,3 +43,4 @@ logs/train_eval_history.csv
 # (e.g. fine_tuning/tinyllama-1.1b-lora/outputs/, fine_tuning/*/outputs/), not just one
 outputs/
 checkpoints_archive/
+reports/
