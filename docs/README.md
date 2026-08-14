@@ -15,7 +15,7 @@ Start there if the goal is understanding, not just running commands.
 
 ## From-scratch track
 
-Two experiments, both training a GPT-style model's architecture and training loop
+Three experiments, all training a GPT-style model's architecture and training loop
 completely from scratch, at different scales and for different goals:
 
 ### [`custom-gpt-153m`](../from_scratch/custom-gpt-153m/)
@@ -30,6 +30,20 @@ polished output quality.
 | [`docs/LLM_DEV_GUIDE.md`](../from_scratch/custom-gpt-153m/docs/LLM_DEV_GUIDE.md) | Beginner-friendly, end-to-end walkthrough of every stage (data → tokenize → train → infer → evaluate) and why each piece exists |
 | [`docs/API_SERVER.md`](../from_scratch/custom-gpt-153m/docs/API_SERVER.md) | Running and calling the FastAPI serving endpoint |
 | [`docs/MIGRATION.md`](../from_scratch/custom-gpt-153m/docs/MIGRATION.md) | Moving a training run between a cloud GPU machine and a local Mac (checkpoint sync, resume) |
+
+### [`custom-gpt-10m`](../from_scratch/custom-gpt-10m/)
+
+The same code as `custom-gpt-153m` (architecture, GPT-2 tokenizer/vocab, training loop) —
+only `context_length`/`embed_size`/`num_heads`/`num_layers` shrunk to a ~10M-parameter
+config, so the whole pipeline trains and iterates fast on a laptop CPU/MPS. The goal is
+proving the mechanics (data prep → train → infer → eval → serve), not output quality —
+see `tinystories-gpt-6m` below for the sibling project that optimizes for quality at a
+similar scale instead. Environment managed by `uv`; every workflow step has a `make`
+target.
+
+| Doc | Covers |
+|---|---|
+| [`README.md`](../from_scratch/custom-gpt-10m/README.md) | Parameter-count breakdown for the shrunk config, `uv`/`make`-based quickstart, everything else inherited from `custom-gpt-153m`'s docs |
 
 ### [`tinystories-gpt-6m`](../from_scratch/tinystories-gpt-6m/)
 

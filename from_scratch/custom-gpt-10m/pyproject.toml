@@ -1,0 +1,32 @@
+[project]
+name = "custom-gpt-10m"
+version = "0.1.0"
+description = "From-scratch GPT with a config-driven model size — train, evaluate, and serve."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "numpy>=1.26",
+    "tiktoken>=0.7",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "datasets>=2.19",
+    "tqdm>=4.66",
+    "huggingface_hub>=0.23",
+]
+
+[project.scripts]
+gpt-config = "gpt.cli.show_config:main"
+gpt-data = "gpt.cli.prepare_data:main"
+gpt-audit = "gpt.cli.audit_data:main"
+gpt-train = "gpt.cli.train:main"
+gpt-infer = "gpt.cli.infer:main"
+gpt-serve = "gpt.cli.serve:main"
+gpt-eval = "gpt.cli.evaluate:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gpt"]
