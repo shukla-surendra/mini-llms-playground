@@ -27,6 +27,8 @@ pages in only the windows actually sampled.
 more ceremony than it is worth.
 """
 
+import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +46,39 @@ TOKEN_DTYPE = np.uint16
 #: irrelevant, small enough that a chunk plus its token output stays comfortably
 #: inside a 16 GB machine.
 CHUNK_CHARS = 8 * 1024 * 1024
+
+#: Text used to fingerprint a tokenizer. Deliberately mixes ASCII words, a digit run,
+#: the document separator and a non-ASCII character, so two tokenizers that differ in
+#: vocabulary size, merge table, digit handling, or special-token treatment produce
+#: different ids for it.
+FINGERPRINT_PROBE = "The quick brown fox 12345 " + DOCUMENT_SEPARATOR + " caf\u00e9"
+
+
+def tokenizer_fingerprint(tokenizer):
+    """A small dict identifying *behaviourally* which tokenizer produced a .bin.
+
+    A `.bin` is a bare uint16 array — nothing in the bytes says which vocabulary the
+    ids index into. Training on a stream produced by a different tokenizer is silent
+    corruption, not an error: every id is still a valid row number, just the wrong
+    one. That is a live risk here because sibling projects share a corpus directory
+    while `custom-gpt-200m` uses a 32,768-entry vocabulary of its own.
+
+    Fingerprinting behaviour rather than a name also catches the subtler case: a
+    tokenizer retrained at the same vocab size produces different merges, so old
+    `.bin` files silently become wrong.
+    """
+    ids = tokenizer.encode(
+        FINGERPRINT_PROBE,
+        allowed_special={DOCUMENT_SEPARATOR},
+        disallowed_special=(),
+    )
+    digest = hashlib.sha256(",".join(str(i) for i in ids).encode()).hexdigest()[:16]
+    return {"n_vocab": int(tokenizer.n_vocab), "probe_ids": len(ids), "probe_sha256": digest}
+
+
+def bin_meta_path(bin_path):
+    return Path(bin_path).with_suffix(".bin.json")
+
 
 
 def load_text(path):
@@ -171,6 +206,9 @@ def build_token_bin(tokenizer, text_path, bin_path=None, chunk_chars=CHUNK_CHARS
             f"dataset.TOKEN_DTYPE and rebuild every .bin."
         )
 
+    bin_meta_path(bin_path).write_text(json.dumps(
+        {"tokenizer": tokenizer_fingerprint(tokenizer), "tokens": total,
+         "source": str(text_path)}, indent=2))
     tmp_path.replace(bin_path)  # atomic: a killed run never leaves a half-written .bin
     return total
 
@@ -197,6 +235,23 @@ def load_token_array(text_path, tokenizer=None, rebuild=False):
                 f"Run `gpt-tokenize` to build it."
             )
         build_token_bin(tokenizer, text_path, bin_path)
+
+
+    meta_path = bin_meta_path(bin_path)
+    if tokenizer is not None and meta_path.exists():
+        stored = json.loads(meta_path.read_text())
+        current = tokenizer_fingerprint(tokenizer)
+        if stored.get("tokenizer") != current:
+            raise ValueError(
+                f"{bin_path} was built by a DIFFERENT tokenizer than the one configured "
+                f"now.\n"
+                f"  stored : {stored.get('tokenizer')}\n"
+                f"  current: {current}\n"
+                f"Token ids are vocabulary-specific: training on this file would index "
+                f"the wrong embedding rows silently rather than fail. Rebuild with "
+                f"`gpt-tokenize --force` (and note that any checkpoint trained on the "
+                f"old stream is not resumable against the new one)."
+            )
 
     return np.memmap(bin_path, dtype=TOKEN_DTYPE, mode="r")
 

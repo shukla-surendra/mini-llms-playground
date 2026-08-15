@@ -1,4 +1,4 @@
-.PHONY: help setup config presets data data-public tokenize tokenize-force audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets data data-public tokenize tokenize-force benchmark benchmark-quick benchmark-sweep audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
 
@@ -25,6 +25,7 @@ help:
 	@echo "  make data          # download all datasets + build the corpus (needs HF_TOKEN for LMSYS)"
 	@echo "  make data-public   # same, but skip the gated LMSYS dataset (no token needed)"
 	@echo "  make tokenize      # build data/*.bin token files (run once per corpus change)"
+	@echo "  make benchmark     # measure throughput + project GPU hours/cost"
 	@echo "  make audit         # corpus quality gate, run before a long training run"
 	@echo ""
 	@echo "  make train         # train in the foreground (auto-resumes from the latest checkpoint)"
@@ -75,6 +76,17 @@ tokenize: setup
 
 tokenize-force: setup
 	uv run gpt-tokenize --force
+
+# Measure real throughput and price the run BEFORE committing GPU hours.
+# Defaults to 10 min warm-up + 50 min measured; --synthetic needs no corpus.
+benchmark: setup
+	uv run gpt-benchmark
+
+benchmark-quick: setup
+	uv run gpt-benchmark --warmup-min 2 --measure-min 5 --synthetic
+
+benchmark-sweep: setup
+	uv run gpt-benchmark --sweep-batch 8,16,24,32 --warmup-min 2 --measure-min 5 --synthetic
 
 audit: setup
 	uv run gpt-audit

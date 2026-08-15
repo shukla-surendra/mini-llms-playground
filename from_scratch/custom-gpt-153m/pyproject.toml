@@ -19,6 +19,7 @@ dependencies = [
 gpt-config = "gpt.cli.show_config:main"
 gpt-data = "gpt.cli.prepare_data:main"
 gpt-tokenize = "gpt.cli.tokenize_corpus:main"
+gpt-benchmark = "gpt.cli.benchmark:main"
 gpt-audit = "gpt.cli.audit_data:main"
 gpt-train = "gpt.cli.train:main"
 gpt-infer = "gpt.cli.infer:main"

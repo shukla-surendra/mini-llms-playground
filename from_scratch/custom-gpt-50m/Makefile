@@ -1,4 +1,4 @@
-.PHONY: help setup config presets data data-public audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets data data-public tokenize tokenize-force benchmark benchmark-quick audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
 
@@ -63,20 +63,35 @@ data: setup
 data-public: setup
 	uv run gpt-data --no-gated
 
+# Build data/*.bin token files once. Training memmaps them instead of re-tokenizing
+# the 1.19 GB corpus on every start (and keeps the token stream out of GPU memory).
+tokenize: setup
+	uv run gpt-tokenize
+
+tokenize-force: setup
+	uv run gpt-tokenize --force
+
+# Measure real throughput and project GPU hours/cost before renting anything.
+benchmark: setup
+	uv run gpt-benchmark
+
+benchmark-quick: setup
+	uv run gpt-benchmark --warmup-min 2 --measure-min 5 --synthetic
+
 audit: setup
 	uv run gpt-audit
 
-train: setup
+train: setup tokenize
 	$(guard_not_running)
 	uv run gpt-train
 
-train-fresh: setup
+train-fresh: setup tokenize
 	$(guard_not_running)
 	uv run gpt-train --no-resume
 
 # Detached background run — survives closing this terminal. Forwards whatever env vars
 # you set the same way `make train` does (GPT_PRESET, ATTN_IMPL, GPT_EMBED_SIZE, ...).
-train-bg: setup
+train-bg: setup tokenize
 	$(guard_not_running)
 	@mkdir -p logs
 	@nohup uv run gpt-train > logs/train_stdout.log 2>&1 & \

@@ -102,10 +102,24 @@ class TrainConfig:
     # amortized at eval_interval=50 -- ~20% of total step time on an M4 Pro, measured directly
     # against an idle GPU. Telemetry-only change: doesn't touch the training path or loss,
     # just how often it's sampled, so it's safe to change between resumes of the same run.
-    eval_interval: int = 200
-    eval_batches: int = 20
+    #
+    # 200/20 -> 800/80: both scaled 4x together, so eval cost stays at the same ~6.7% of
+    # wall clock while each eval draws 4x the tokens (20,480 -> 81,920 per split). This
+    # trades eval *frequency* for eval *quality*, and the reason is measured, not
+    # theoretical: at 20 batches the per-eval sigma was ~0.14, and a single lucky draw at
+    # step 119,600 (2.93, ~2.7 sigma below its window mean) held `best.pt` for 60,000+
+    # steps while mean test loss kept falling 3.55 -> 3.26. `best_test_loss` gates which
+    # checkpoint is kept, so its noise directly decides which model you end up serving.
+    # Halving sigma to ~0.07 makes that record a measurement rather than a coin flip.
+    eval_interval: int = 800
+    eval_batches: int = 80
     save_every_steps: int = 200
     seed: int = 42
+    # "auto" = bfloat16 on CUDA, fp32 elsewhere (MPS autocast is unreliable and has
+    # no tensor cores to win back). bf16 not fp16: it keeps fp32's exponent range so
+    # no GradScaler is needed. No effect on this laptop run; matters if this model is
+    # ever trained on a rented GPU.
+    precision: str = "auto"
     max_new_tokens: int = 80     # demo completion printed at the end of a run
     demo_prompt: str = "The quick brown fox"
 
@@ -237,7 +251,35 @@ class Paths:
         return self.log_dir / f"quality_history_{self.label}.jsonl"
 
 
+
+_TRAIN_ENV_OVERRIDES = {
+    "batch_size": ("GPT_BATCH_SIZE", int),
+    "grad_accum_steps": ("GPT_GRAD_ACCUM", int),
+    "lr": ("GPT_LR", float),
+    "min_lr": ("GPT_MIN_LR", float),
+    "steps": ("GPT_STEPS", int),
+    "eval_interval": ("GPT_EVAL_INTERVAL", int),
+    "eval_batches": ("GPT_EVAL_BATCHES", int),
+    "save_every_steps": ("GPT_SAVE_EVERY", int),
+    "precision": ("GPT_PRECISION", str),
+}
+
+
+def resolve_train_config():
+    """TrainConfig with any `GPT_*` env overrides applied.
+
+    Lets a smoke test or a differently-sized machine run the same checkout without
+    editing source — a smoke test that needs a code edit is one people skip.
+    """
+    overrides = {}
+    for field_name, (env_var, cast) in _TRAIN_ENV_OVERRIDES.items():
+        raw = os.getenv(env_var)
+        if raw is not None:
+            overrides[field_name] = cast(raw)
+    return replace(TrainConfig(), **overrides) if overrides else TrainConfig()
+
+
 def load_settings(preset_name=None):
     """One call for everything an entrypoint needs: (model_cfg, train_cfg, paths, label)."""
     model_cfg, label = resolve_model_config(preset_name)
-    return model_cfg, TrainConfig(), Paths(label=label), label
+    return model_cfg, resolve_train_config(), Paths(label=label), label

@@ -4,7 +4,7 @@ import argparse
 import os
 
 from ..config import load_settings
-from ..data.prepare import build_corpus, load_book_chunks
+from ..data.prepare import build_corpus, load_extra_documents
 from ..data.sources import DATASETS
 
 
@@ -18,7 +18,11 @@ def main():
                         help="Reuse already-downloaded files under data/raw/")
     parser.add_argument("--max-per-dataset", type=int, default=100_000,
                         help="Cap on conversations kept per dataset")
-    parser.add_argument("--min-turns", type=int, default=3)
+    parser.add_argument("--min-turns", type=int, default=2,
+                        help="Minimum turns to keep a conversation. 2 is the real floor "
+                             "(one exchange) — instruction-schema sources like Dolly are "
+                             "always exactly 2 turns, so anything higher silently drops "
+                             "100%% of single-turn sources, not just short multi-turn ones.")
     parser.add_argument("--min-turn-chars", type=int, default=24)
     parser.add_argument("--min-ascii-ratio", type=float, default=0.995)
     parser.add_argument("--num-prompts", type=int, default=50)
@@ -26,10 +30,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--list", action="store_true",
                         help="List the registered datasets and exit")
-    parser.add_argument("--books-jsonl", default=None,
-                        help="Path to tools/corpus-extractor's JSONL output "
-                             "(e.g. data/books_staging/dataset.jsonl) — pooled and "
-                             "shuffled in alongside the chat conversations. "
+    parser.add_argument("--extra-jsonl", action="append", default=None,
+                        help="Path to tools/corpus-extractor's JSONL output (e.g. "
+                             "data/books_staging/dataset.jsonl, or extracted repo source "
+                             "code) — pooled and shuffled in alongside the chat "
+                             "conversations. Repeatable: pass --extra-jsonl multiple "
+                             "times to combine several extraction runs (books, "
+                             "multiple repos, ...) in one build. "
                              "See docs/BOOKS_CORPUS_INTEGRATION.md.")
     args = parser.parse_args()
 
@@ -40,10 +47,11 @@ def main():
             print(f"           {source.summary}")
         return
 
-    extra_documents = ()
-    if args.books_jsonl:
-        extra_documents = load_book_chunks(args.books_jsonl)
-        print(f"[info] loaded {len(extra_documents):,} extra document(s) from {args.books_jsonl}")
+    extra_documents = []
+    for path in args.extra_jsonl or []:
+        docs = load_extra_documents(path)
+        print(f"[info] loaded {len(docs):,} extra document(s) from {path}")
+        extra_documents.extend(docs)
 
     _, _, paths, _ = load_settings()
     stats = build_corpus(
@@ -66,11 +74,11 @@ def main():
         print(f"  {hf_id:<40} {count:>8,} conversations")
     print(f"  {'TOTAL':<40} {stats['total_conversations']:>8,}")
     if stats["extra_documents"]:
-        print(f"  {'extra_documents (books)':<40} {stats['extra_documents']:>8,}")
+        print(f"  {'extra_documents (books/repos)':<40} {stats['extra_documents']:>8,}")
     print(f"\n  train: {paths.train_data} ({stats['train_conversations']:,} conversations"
-          f" + {stats['extra_train_documents']:,} book docs)")
+          f" + {stats['extra_train_documents']:,} extra docs)")
     print(f"  test:  {paths.test_data} ({stats['test_conversations']:,} conversations"
-          f" + {stats['extra_test_documents']:,} book docs)")
+          f" + {stats['extra_test_documents']:,} extra docs)")
     print(f"  prompts: {paths.test_prompts} ({stats['prompts']} prompts)")
 
 

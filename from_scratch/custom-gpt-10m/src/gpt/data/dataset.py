@@ -6,6 +6,8 @@ base model like GPT-2 is pretrained. The corpus happens to contain chat transcri
 no per-turn loss masking.
 """
 
+import hashlib
+import json
 from pathlib import Path
 
 import torch

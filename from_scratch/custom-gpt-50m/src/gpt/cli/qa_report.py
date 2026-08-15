@@ -15,7 +15,7 @@ from pathlib import Path
 
 import torch
 
-from ..checkpoint import load_model, resolve_serving_checkpoint
+from ..checkpoint import load_model, select_checkpoint
 from ..config import load_settings
 from ..data.sources import DATASETS
 from ..inference import generate_text
@@ -248,13 +248,18 @@ def main():
                               "(default: run every prompt in every active category)")
     parser.add_argument("--out", default=None,
                          help="Output HTML path (default: reports/qa_report_<label>_step<N>.html)")
+    parser.add_argument("--checkpoint", choices=["best", "latest", "final"], default=None,
+                        help="Which checkpoint to use (default: best, falling back to "
+                             "latest/final). Use 'latest' when best.pt has gone stale — "
+                             "e.g. after an eval-config change re-baselines the noise, or "
+                             "a corpus rebuild makes the test set genuinely harder.")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
 
     _, train_cfg, paths, label = load_settings(args.preset)
     device = get_device()
-    checkpoint_path = resolve_serving_checkpoint(paths)
+    checkpoint_path = select_checkpoint(paths, args.checkpoint)
     checkpoint, tokenizer, model = load_model(checkpoint_path, device)
     step = checkpoint.get("step", 0)
     param_count = sum(p.numel() for p in model.parameters())

@@ -6,7 +6,7 @@ with gradient accumulation so a batch_size of 1 still yields a large effective b
 """
 
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 import os
 import time
@@ -19,9 +19,8 @@ from ..checkpoint import atomic_save, is_compatible, make_payload, remap_attn_im
 from ..config import TOKENIZER_NAME
 from ..data import (
     effective_context_length,
-    encode_raw,
     get_batch,
-    load_text,
+    load_token_array,
     next_token_loss,
 )
 from ..inference.generate import generate_text
@@ -41,6 +40,15 @@ EVAL_HISTORY_FIELDS = [
     "processed_tokens",
     "total_training_hours",
 ]
+
+
+def format_eta(remaining_steps, steps_per_hour):
+    """(hours, 'Mon 17 Aug 11:28') for a remaining-step count, or None if unknown."""
+    if not steps_per_hour or steps_per_hour <= 0 or remaining_steps <= 0:
+        return None
+    hours = remaining_steps / steps_per_hour
+    finish = datetime.now() + timedelta(hours=hours)
+    return hours, finish.strftime("%a %d %b %H:%M")
 
 
 def lr_for_step(step_idx, train_cfg):
@@ -78,15 +86,50 @@ def append_eval_history(path, row):
         writer.writerow(row)
 
 
+def resolve_amp(precision, device):
+    """Return (device_type, dtype_or_None) for `torch.autocast`.
+
+    "auto" means bfloat16 on CUDA and full fp32 everywhere else. bf16 rather than fp16
+    because it has fp32's exponent range, so training needs no GradScaler and cannot
+    silently underflow gradients — but it requires Ampere or newer (an L4 or A10G has
+    it; a T4 does not). MPS/CPU stay fp32: MPS autocast is not dependable, and without
+    tensor cores there is nothing to win.
+
+    Returning dtype=None means "no autocast", which callers pass straight through as
+    `enabled=False` so there is only one code path.
+    """
+    # Normalise first: `device` may be "cuda:0", but autocast wants a bare device type.
+    device_type = "cuda" if str(device).startswith("cuda") else str(device)
+    if precision == "fp32":
+        return device_type, None
+    if precision in ("bf16", "bfloat16"):
+        return device_type, torch.bfloat16
+    if precision in ("fp16", "float16"):
+        return device_type, torch.float16
+    if precision != "auto":
+        raise ValueError(
+            f"Unknown precision {precision!r}. Use auto, bf16, fp16 or fp32."
+        )
+    if device_type == "cuda" and torch.cuda.is_bf16_supported():
+        return device_type, torch.bfloat16
+    return device_type, None
+
+
 @torch.no_grad()
-def estimate_loss(model, train_tokens, test_tokens, ctx_len, vocab_size, train_cfg, device):
+def estimate_loss(model, train_tokens, test_tokens, ctx_len, vocab_size, train_cfg,
+                  device, amp=None):
     model.eval()
+    device_type, amp_dtype = amp if amp else resolve_amp(train_cfg.precision, device)
     out = {}
     for name, tokens in (("train", train_tokens), ("test", test_tokens)):
         losses = []
         for _ in range(train_cfg.eval_batches):
             xb, yb = get_batch(tokens, ctx_len, train_cfg.batch_size, device)
-            losses.append(next_token_loss(model(xb), yb, vocab_size).item())
+            with torch.autocast(device_type=device_type,
+                                dtype=amp_dtype or torch.float32,
+                                enabled=amp_dtype is not None):
+                loss = next_token_loss(model(xb), yb, vocab_size)
+            losses.append(loss.item())
         out[name] = sum(losses) / len(losses)
     model.train()
     return out
@@ -103,8 +146,12 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
             f"declares vocab_size={model_cfg.vocab_size}. Update config.VOCAB_SIZE."
         )
 
-    train_tokens = encode_raw(tokenizer, load_text(paths.train_data), device)
-    test_tokens = encode_raw(tokenizer, load_text(paths.test_data), device)
+    # Disk-backed uint16 memmaps built once by `gpt-tokenize` (built on demand here if
+    # missing/stale). Besides removing the re-tokenize-on-every-restart cost, this keeps
+    # the token stream off the GPU: the old path put ~280M int64 tokens (2.2 GB) into
+    # MPS unified memory for train plus ~250 MB for test.
+    train_tokens = load_token_array(paths.train_data, tokenizer)
+    test_tokens = load_token_array(paths.test_data, tokenizer)
     if len(train_tokens) < 2 or len(test_tokens) < 2:
         raise ValueError("Train/test corpora must each contain at least 2 tokens.")
 
@@ -121,9 +168,23 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
         model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
     )
 
+    amp_device_type, amp_dtype = resolve_amp(train_cfg.precision, device)
+
     print(f"Model: {label}  |  {model.param_count():,} parameters  |  device={device}  |  attn_impl={attn_impl}")
     print(f"Train tokens: {len(train_tokens):,}  Test tokens: {len(test_tokens):,}")
+    budget = train_cfg.steps * train_cfg.batch_size * ctx_len
+    print(
+        f"Precision: {amp_dtype if amp_dtype else 'fp32'}  |  "
+        f"batch {train_cfg.batch_size} x accum {train_cfg.grad_accum_steps} = "
+        f"{train_cfg.batch_size * train_cfg.grad_accum_steps} seqs/update"
+    )
+    print(
+        f"Budget: {train_cfg.steps:,} steps x {train_cfg.batch_size * ctx_len:,} tok = "
+        f"{budget / 1e9:.2f}B tokens ({budget / model.param_count():.1f} tok/param, "
+        f"{budget / len(train_tokens):.2f} epochs)"
+    )
     print(f"Checkpoints: {paths.checkpoint_dir}/")
+
 
     state = {
         "best_test_loss": float("inf"),
@@ -134,6 +195,28 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
 
     if resume and paths.latest_checkpoint.exists():
         _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device)
+
+    # ETA from this run's own history. Only meaningful after a resume, where
+    # `start_step` steps have demonstrably taken `total_training_seconds` — at step 0
+    # there is no rate to extrapolate from yet, so it is simply omitted rather than
+    # guessed. Note this is *training* time: a machine that sleeps or gets stopped
+    # finishes later in wall-clock terms than this says.
+    done_steps = state["start_step"]
+    done_hours = state["total_training_seconds"] / 3600.0
+    if done_steps > 0 and done_hours > 0:
+        rate = done_steps / done_hours
+        eta = format_eta(train_cfg.steps - done_steps, rate)
+        if eta:
+            hours, finish = eta
+            print(
+                f"Progress: step {done_steps:,}/{train_cfg.steps:,} "
+                f"({100.0 * done_steps / train_cfg.steps:.1f}%)  |  "
+                f"{rate:,.0f} steps/hr so far"
+            )
+            print(
+                f"ETA: {hours:,.1f} more training-hours "
+                f"({hours / 24:.1f} days) -> ~{finish} if run continuously"
+            )
 
     return _run_loop(
         model=model,
@@ -148,6 +231,8 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
         label=label,
         device=device,
         state=state,
+        amp_device_type=amp_device_type,
+        amp_dtype=amp_dtype,
     )
 
 
@@ -202,7 +287,8 @@ def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device):
 
 
 def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
-              model_cfg, train_cfg, paths, label, device, state):
+              model_cfg, train_cfg, paths, label, device, state,
+              amp_device_type=None, amp_dtype=None):
     run_start = time.time()
 
     def elapsed():
@@ -259,6 +345,7 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 losses = estimate_loss(
                     model, train_tokens, test_tokens, ctx_len,
                     model_cfg.vocab_size, train_cfg, device,
+                    amp=(amp_device_type, amp_dtype),
                 )
                 improved = losses["test"] < state["best_test_loss"]
                 if improved:
@@ -287,7 +374,12 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 }
 
             xb, yb = get_batch(train_tokens, ctx_len, train_cfg.batch_size, device)
-            loss = next_token_loss(model(xb), yb, model_cfg.vocab_size)
+            with torch.autocast(device_type=amp_device_type,
+                                dtype=amp_dtype or torch.float32,
+                                enabled=amp_dtype is not None):
+                loss = next_token_loss(model(xb), yb, model_cfg.vocab_size)
+            # No GradScaler: bf16 keeps fp32's exponent range, so gradients cannot
+            # underflow the way fp16's would. Weights/grads stay fp32 regardless.
             (loss / train_cfg.grad_accum_steps).backward()
 
             is_accum_boundary = (step - start_step + 1) % train_cfg.grad_accum_steps == 0
@@ -303,6 +395,8 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 "est_epoch": f"{state['processed_tokens'] / len(train_tokens):.3f}",
                 "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
                 "total_h": f"{elapsed() / 3600.0:.2f}",
+                "eta_h": (f"{(train_cfg.steps - step) / max(step / max(elapsed() / 3600.0, 1e-9), 1e-9):.1f}"
+                          if step > 0 and elapsed() > 0 else "?"),
             }
             if latest_metrics:
                 postfix.update(latest_metrics)

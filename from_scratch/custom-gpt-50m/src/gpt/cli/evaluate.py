@@ -4,7 +4,7 @@ import argparse
 
 import torch
 
-from ..checkpoint import load_model, resolve_serving_checkpoint
+from ..checkpoint import load_model, select_checkpoint
 from ..config import load_settings
 from ..data import DEFAULT_PROMPTS, load_prompts
 from ..evaluation import evaluate, format_report
@@ -25,12 +25,17 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-compare", action="store_true",
                         help="Skip the delta-vs-previous-run comparison")
+    parser.add_argument("--checkpoint", choices=["best", "latest", "final"], default=None,
+                        help="Which checkpoint to use (default: best, falling back to "
+                             "latest/final). Use 'latest' when best.pt has gone stale — "
+                             "e.g. after an eval-config change re-baselines the noise, or "
+                             "a corpus rebuild makes the test set genuinely harder.")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     _, _, paths, _ = load_settings(args.preset)
     device = get_device()
-    checkpoint_path = resolve_serving_checkpoint(paths)
+    checkpoint_path = select_checkpoint(paths, args.checkpoint)
     checkpoint, tokenizer, model = load_model(checkpoint_path, device)
 
     prompts = load_prompts(paths.test_prompts, default_prompts=DEFAULT_PROMPTS)[: args.max_prompts]

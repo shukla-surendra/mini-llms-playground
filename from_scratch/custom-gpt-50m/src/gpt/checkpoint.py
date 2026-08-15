@@ -148,6 +148,33 @@ def resolve_serving_checkpoint(paths):
     return paths.best_checkpoint
 
 
+def select_checkpoint(paths, which=None):
+    """Pick a specific checkpoint by name, or fall back to resolve_serving_checkpoint()'s
+    best->latest->final preference when `which` is None (unchanged default behavior).
+
+    Exists because "best" isn't always the checkpoint worth looking at: best.pt only
+    updates when a run's test_loss beats its prior best, so it can go stale for a long
+    stretch after a real, non-regressive change to what "beating the old best" even
+    means — e.g. a corpus rebuild that makes the test set genuinely harder. latest.pt
+    always reflects current training state regardless of whether it's "won" yet. An
+    explicit choice that doesn't exist on disk fails loudly rather than silently
+    falling back to a different checkpoint than the one asked for.
+    """
+    if which is None:
+        return resolve_serving_checkpoint(paths)
+    mapping = {
+        "best": paths.best_checkpoint,
+        "latest": paths.latest_checkpoint,
+        "final": paths.final_checkpoint,
+    }
+    if which not in mapping:
+        raise ValueError(f"Unknown checkpoint choice {which!r}. Use one of: {', '.join(mapping)}")
+    path = mapping[which]
+    if not path.exists():
+        raise FileNotFoundError(f"{path} not found (--checkpoint {which} was requested explicitly).")
+    return path
+
+
 def is_compatible(checkpoint, model_cfg, context_length):
     """Whether a checkpoint's architecture matches the currently configured one."""
     return (

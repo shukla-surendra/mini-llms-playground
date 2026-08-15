@@ -6,7 +6,7 @@ with gradient accumulation so a batch_size of 1 still yields a large effective b
 """
 
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 import os
 import time
@@ -40,6 +40,15 @@ EVAL_HISTORY_FIELDS = [
     "processed_tokens",
     "total_training_hours",
 ]
+
+
+def format_eta(remaining_steps, steps_per_hour):
+    """(hours, 'Mon 17 Aug 11:28') for a remaining-step count, or None if unknown."""
+    if not steps_per_hour or steps_per_hour <= 0 or remaining_steps <= 0:
+        return None
+    hours = remaining_steps / steps_per_hour
+    finish = datetime.now() + timedelta(hours=hours)
+    return hours, finish.strftime("%a %d %b %H:%M")
 
 
 def lr_for_step(step_idx, train_cfg):
@@ -177,6 +186,7 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
     )
     print(f"Checkpoints: {paths.checkpoint_dir}/")
 
+
     state = {
         "best_test_loss": float("inf"),
         "start_step": 0,
@@ -186,6 +196,28 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
 
     if resume and paths.latest_checkpoint.exists():
         _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device)
+
+    # ETA from this run's own history. Only meaningful after a resume, where
+    # `start_step` steps have demonstrably taken `total_training_seconds` — at step 0
+    # there is no rate to extrapolate from yet, so it is simply omitted rather than
+    # guessed. Note this is *training* time: a machine that sleeps or gets stopped
+    # finishes later in wall-clock terms than this says.
+    done_steps = state["start_step"]
+    done_hours = state["total_training_seconds"] / 3600.0
+    if done_steps > 0 and done_hours > 0:
+        rate = done_steps / done_hours
+        eta = format_eta(train_cfg.steps - done_steps, rate)
+        if eta:
+            hours, finish = eta
+            print(
+                f"Progress: step {done_steps:,}/{train_cfg.steps:,} "
+                f"({100.0 * done_steps / train_cfg.steps:.1f}%)  |  "
+                f"{rate:,.0f} steps/hr so far"
+            )
+            print(
+                f"ETA: {hours:,.1f} more training-hours "
+                f"({hours / 24:.1f} days) -> ~{finish} if run continuously"
+            )
 
     return _run_loop(
         model=model,
@@ -365,6 +397,8 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 "est_epoch": f"{state['processed_tokens'] / len(train_tokens):.3f}",
                 "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
                 "total_h": f"{elapsed() / 3600.0:.2f}",
+                "eta_h": (f"{(train_cfg.steps - step) / max(step / max(elapsed() / 3600.0, 1e-9), 1e-9):.1f}"
+                          if step > 0 and elapsed() > 0 else "?"),
             }
             if latest_metrics:
                 postfix.update(latest_metrics)

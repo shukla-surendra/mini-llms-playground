@@ -119,7 +119,15 @@ class TrainConfig:
     # expensive here than in the batch_size=1 sibling projects. 500 keeps it under ~3%
     # of step time; it is telemetry only and safe to change between resumes.
     eval_interval: int = 500
-    eval_batches: int = 20
+    # `best.pt` is gated on this sample, so its noise decides which checkpoint gets
+    # kept. Each eval draws eval_batches * batch_size * context_length tokens per
+    # split — 40*16*1024 = 655,360 here, vs the 50m sibling's 20*1*1024 = 20,480,
+    # whose measured per-eval sigma of ~0.14 let a single lucky draw hold `best.pt`
+    # for 60,000+ steps while the true loss kept falling. 40 puts sigma near 0.025
+    # for ~5% of wall clock; raising it further buys little (sigma only falls as
+    # 1/sqrt(n)) and the residual pathology is better fixed by smoothing than by
+    # more samples.
+    eval_batches: int = 40
     # A checkpoint is ~1.8 GB (fp32 weights + AdamW moments), so saving every 200 steps
     # would spend more time on I/O than on training. 2000 is ~17 min of wall clock.
     save_every_steps: int = 2_000
