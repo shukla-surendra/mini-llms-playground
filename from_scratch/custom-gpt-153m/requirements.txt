@@ -1,8 +1,0 @@
-torch
-numpy
-tiktoken
-fastapi
-uvicorn
-datasets
-tqdm
-huggingface_hub

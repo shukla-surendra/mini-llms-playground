@@ -8,10 +8,32 @@
 
 use std::fs;
 use std::fmt::Write as _;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use epub::doc::EpubDoc;
+
+/// Runs `f`, converting a Rust panic into a normal `Err` instead of unwinding past this
+/// call. Necessary because `pdf-extract` (and, defensively, the other format crates too)
+/// use real `panic!`s internally for some malformed-input cases rather than returning a
+/// `Result` — confirmed in practice, not hypothetically: a real-world PDF with an unusual
+/// `DeviceN` colorspace crashed the entire batch run before this existed. Ordinary
+/// `Result`-based error handling in `main.rs`'s per-file loop can't catch a panic; it has
+/// to be stopped here, at the point where the risky external call happens.
+fn catch_panic<T>(f: impl FnOnce() -> Result<T> + panic::UnwindSafe) -> Result<T> {
+    match panic::catch_unwind(f) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_string());
+            anyhow::bail!("panicked during extraction: {message}")
+        }
+    }
+}
 
 /// Plain-text-shaped files: read as UTF-8, falling back to lossy conversion rather than
 /// erroring out — a source file with one stray non-UTF-8 byte (common in older code with
@@ -27,15 +49,19 @@ pub fn extract_plain_text(path: &Path) -> Result<String> {
 /// that needs to be right.
 pub fn extract_html(path: &Path) -> Result<String> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(html2text::from_read(bytes.as_slice(), 10_000))
+    catch_panic(AssertUnwindSafe(|| Ok(html2text::from_read(bytes.as_slice(), 10_000))))
 }
 
 /// PDF: extract whatever text layer exists. Scanned/image-only PDFs have no text layer
 /// at all and will correctly extract to an empty (or near-empty) string — this is not a
 /// bug to work around here; it's a real limitation of text-layer extraction (no OCR),
-/// documented in the README rather than silently masked.
+/// documented in the README rather than silently masked. Wrapped in `catch_panic`: see
+/// its doc comment — `pdf-extract` really does panic on some malformed real-world PDFs.
 pub fn extract_pdf(path: &Path) -> Result<String> {
-    pdf_extract::extract_text(path).with_context(|| format!("extracting PDF text from {}", path.display()))
+    catch_panic(AssertUnwindSafe(|| {
+        pdf_extract::extract_text(path)
+            .with_context(|| format!("extracting PDF text from {}", path.display()))
+    }))
 }
 
 /// EPUB: each chapter is XHTML inside a zip container, ordered by the book's own spine
@@ -44,25 +70,27 @@ pub fn extract_pdf(path: &Path) -> Result<String> {
 /// `extract_html` uses, then joined — an EPUB is, mechanically, just HTML with a
 /// reading-order index on top, so it reuses that path rather than a separate parser.
 pub fn extract_epub(path: &Path) -> Result<String> {
-    let mut doc = EpubDoc::new(path)
-        .with_context(|| format!("opening EPUB {}", path.display()))?;
+    catch_panic(AssertUnwindSafe(|| {
+        let mut doc = EpubDoc::new(path)
+            .with_context(|| format!("opening EPUB {}", path.display()))?;
 
-    let mut out = String::new();
-    let spine_len = doc.spine.len();
-    for i in 0..spine_len {
-        // get_current_str() reads whatever chapter go_next()/the initial position points
-        // at; content is (String, mime type) — only the text matters here.
-        if let Some((content, _mime)) = doc.get_current_str() {
-            let chapter_text = html2text::from_read(content.as_bytes(), 10_000);
-            if !chapter_text.trim().is_empty() {
-                let _ = write!(out, "{chapter_text}\n\n");
+        let mut out = String::new();
+        let spine_len = doc.spine.len();
+        for i in 0..spine_len {
+            // get_current_str() reads whatever chapter go_next()/the initial position points
+            // at; content is (String, mime type) — only the text matters here.
+            if let Some((content, _mime)) = doc.get_current_str() {
+                let chapter_text = html2text::from_read(content.as_bytes(), 10_000);
+                if !chapter_text.trim().is_empty() {
+                    let _ = write!(out, "{chapter_text}\n\n");
+                }
+            }
+            if i + 1 < spine_len {
+                doc.go_next();
             }
         }
-        if i + 1 < spine_len {
-            doc.go_next();
-        }
-    }
-    Ok(out)
+        Ok(out)
+    }))
 }
 
 /// Dispatch by extension. Returns `Ok(None)` for an extension this module doesn't know

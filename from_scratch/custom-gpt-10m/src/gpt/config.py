@@ -105,6 +105,7 @@ PRESETS = {
     "tiny": ModelConfig(context_length=256, embed_size=128, num_heads=4, num_layers=4),
     "10m": ModelConfig(context_length=512, embed_size=160, num_heads=8, num_layers=6),
     "30m": ModelConfig(context_length=512, embed_size=384, num_heads=6, num_layers=6),
+    # Matches the sibling custom-gpt-50m project's architecture exactly.
     "50m": ModelConfig(context_length=1024, embed_size=512, num_heads=8, num_layers=8),
     # Matches the sibling custom-gpt-153m project's architecture exactly.
     "153m": ModelConfig(context_length=1024, embed_size=768, num_heads=12, num_layers=16),
@@ -174,6 +175,24 @@ class Paths:
     @property
     def checkpoint_dir(self) -> Path:
         return self.checkpoint_root / self.label
+
+    @property
+    def stop_file(self) -> Path:
+        """A polled, file-based stop signal — see training/trainer.py's `_run_loop`.
+
+        SIGINT (Ctrl-C / `kill -INT`) is normally caught as KeyboardInterrupt and handled
+        gracefully, but this isn't guaranteed: a native library somewhere in the torch/MPS/
+        multiprocessing stack can intercept or block signal delivery before Python's default
+        handler ever sees it (observed in practice, not hypothetical — see
+        docs/CODE_WALKTHROUGH.md). Checking for this file's existence every step is a
+        signal-delivery-quirk-proof fallback: it only depends on the training loop's own
+        Python code actually running, which — unlike signal delivery — is something we can
+        already see happening (the step counter advancing) whenever a run is alive.
+        Shared across labels/presets rather than namespaced per checkpoint_dir, since only
+        one `gpt-train` process is ever expected to be running at a time (see the Makefile's
+        `guard_not_running`).
+        """
+        return self.checkpoint_root / "STOP_TRAINING"
 
     @property
     def serving_checkpoint(self) -> Path:

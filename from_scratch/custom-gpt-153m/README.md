@@ -7,407 +7,386 @@ tags:
 - text-generation
 - causal-lm
 datasets:
+- HuggingFaceH4/ultrachat_200k
+- OpenAssistant/oasst1
+- HuggingFaceTB/smoltalk
 - lmsys/lmsys-chat-1m
 pipeline_tag: text-generation
 ---
 
-# Custom GPT (153M) — From-Scratch Training
+# custom-gpt — a from-scratch GPT with a configurable size
 
 Part of [mini-llms-playground](../../README.md)'s **from-scratch track** — see the
 [top-level README](../../README.md) and [docs index](../../docs/README.md) for how this
 relates to the [fine-tuning track](../../fine_tuning/tinyllama-1.1b-lora/README.md).
 
-This project trains and serves a small GPT-style language model on conversation data,
-built from scratch (custom architecture, custom training loop) rather than fine-tuning a
-pretrained model.
+Trains a GPT-style decoder from zero — custom architecture, custom training loop, no
+pretrained weights — on the same corpus as the sibling
+[`custom-gpt-153m`](../custom-gpt-153m/README.md) project.
 
-## What this project includes
+**The model size is a setting, not a rewrite.** The default is ~10M parameters for fast
+laptop iteration, but the same code trains anything from ~7M to ~153M by changing one
+environment variable. Everything downstream — parameter count, checkpoint location, the
+model itself — follows automatically.
 
-- Dataset preparation:
-  - `prepare_dataset.py` (synthetic conversations)
-  - `prepare_dataset_lmsys.py` (LMSYS parquet -> train/test/prompts)
-  - `audit_dataset.py` (train/test quality audit)
-- Training:
-  - `tiny_llm.py`
-- Inference test:
-  - `inference.py`
-- Quality evaluation:
-  - `eval_quality.py`
-- FastAPI server:
-  - `api_server.py`
-- Workflow script:
-  - `scripts/workflow.sh`
-- Storage:
-  - `scripts/upload_to_hf.py` (Upload artifacts to Hugging Face Hub)
-
-## Current model details
-
-The current default model in `tiny_llm.py` is:
-
-- Architecture: GPT-style decoder (causal attention, pre-norm residual blocks, tied embeddings)
-- `context_length`: `1024`
-- `embed_size`: `768`
-- `num_heads`: `12`
-- `num_layers`: `12`
-- `dropout`: `0.1`
-- `batch_size`: `1`
-- `grad_accum_steps`: `32` (effective batch update every 32 micro-steps)
-- Loss: assistant-targeted masked next-token loss (focuses training on `Assistant:` turns)
-- Optimization: warmup + cosine LR decay, gradient clipping (`max_norm=1.0`)
-- Tokenizer: `gpt2` (`tiktoken`)
-- Checkpoints:
-  - `tiny_llm_checkpoint_latest.pt` (periodic resume checkpoint)
-  - `tiny_llm_checkpoint_best.pt` (best by test loss)
-  - `tiny_llm_checkpoint.pt` (serving checkpoint, updated from best)
-  - `tiny_llm_checkpoint_final.pt` (checkpoint at end of run)
-
-### Parameter count (current config)
-
-- **152,791,296 trainable parameters** (about **152.8M**)
-
-What is a parameter:
-- A parameter is a learned numeric value (weight or bias) updated by backpropagation.
-- During training, these values are adjusted so next-token predictions get lower loss.
-
-Impact of parameter count:
-- More parameters: higher capacity and usually better fit on complex data.
-- More parameters: higher memory use and slower training/inference.
-- Larger models generally require more data and training compute to avoid overfitting.
-
-How this was calculated from `tiny_llm.py`:
-
-- Variables used:
-  - `vocab_size = 50257` (from GPT-2 tokenizer)
-  - `context_length = 1024`
-  - `embed_size = 768`
-  - `num_layers = 16`
-  - `num_heads = 12` (affects attention shape, not total formula independently once `embed_size` is fixed)
-- Weight tying:
-  - `lm_head.weight = token_emb.weight`, so output head does not add a second vocab projection matrix.
-
-Breakdown:
-
-- Token embedding: `vocab_size * embed_size`
-  - `50257 * 768 = 38,597,376`
-- Positional embedding: `context_length * embed_size`
-  - `1024 * 768 = 786,432`
-- Per Transformer block (`16` blocks):
-  - Attention params:
-    - `in_proj_weight`: `3E*E`
-    - `in_proj_bias`: `3E`
-    - `out_proj_weight`: `E*E`
-    - `out_proj_bias`: `E`
-  - MLP params:
-    - `E*(4E) + (4E)` and `(4E)*E + E`
-  - LayerNorms:
-    - two layer norms, each has `2E` params (weight + bias)
-  - Per block total with `E=768`: `7,087,872`
-  - All blocks: `7,087,872 * 16 = 113,405,952`
-- Final LayerNorm: `2E = 1,536`
-
-Final total:
-
-- `38,597,376 + 786,432 + 113,405,952 + 1,536 = 152,791,296`
-
-This is a small model for local experimentation, not a production-scale LLM.
-
-## About “1B parameter model”
-
-This project is **not** a 1B model right now.
-
-- Current: ~152.8M params
-- 1B means ~1,000,000,000 params (about 8x larger than current)
-
-To approach 1B, you generally need much larger settings (example direction):
-
-- much higher `embed_size` (e.g., 1536+)
-- many more layers (e.g., 24+)
-- larger context window
-- significantly more training data and steps
-- much more compute and memory than typical local laptop training
+```bash
+make presets            # see every size and its exact parameter count
+GPT_PRESET=30m make train
+```
 
 ## Quickstart
 
-1) Install dependencies
+```bash
+make setup              # uv sync: create .venv, install the package
+make config             # what will I train? exact parameter count, no guessing
+make data-public        # build the corpus (4 public datasets, no HF token needed)
+make train              # train (Ctrl-C is safe — it saves a resumable checkpoint)
+make infer              # generate from the trained checkpoint
+make serve              # FastAPI server on :8000
+```
+
+`make data` also includes the gated LMSYS-Chat-1M set and needs `HF_TOKEN`; see
+[docs/DATASETS.md](docs/DATASETS.md).
+
+> Ctrl-C during `make train` is safe — see
+> [Start, stop, and resume training](#start-stop-and-resume-training) below.
+
+## Choosing a model size
+
+```
+preset             params    ctx  embed  heads  layers
+--------------------------------------------------------
+tiny            7,259,008    256    128      4       4
+10m             9,979,040    512    160      8       6
+30m            30,142,848    512    384      6       6
+50m            51,475,968   1024    512      8       8
+153m          152,791,296   1024    768     12      16
+```
 
 ```bash
-pip install -r requirements.txt
+GPT_PRESET=30m make train                        # a named preset
+GPT_EMBED_SIZE=192 GPT_NUM_LAYERS=8 make train   # or override individual fields
 ```
 
-2) Build dataset (LMSYS local parquet path default in script)
+Overrides get their own label (`custom-e192-l8-h8-c512`) and their own checkpoint
+directory, so switching sizes never overwrites another model's weights. Invalid
+combinations are rejected up front with an explanation rather than failing deep inside
+the model:
+
+```
+ValueError: embed_size (100) must be divisible by num_heads (8) — each head gets
+embed_size/num_heads dimensions.
+```
+
+The counts above are computed from the architecture, not hardcoded, and are verified
+exact against instantiated models. The `153m` preset reproduces the sibling project's
+architecture precisely (152,791,296 parameters).
+
+### Where the parameters go
+
+At small sizes the token embedding dominates, because the GPT-2 vocabulary (50,257
+tokens) is fixed regardless of how small the model gets:
+
+```
+token_embedding         8,041,120  ( 80.6%)
+position_embedding         81,920  (  0.8%)
+transformer_blocks      1,855,680  ( 18.6%)
+final_layernorm               320  (  0.0%)
+total                   9,979,040
+```
+
+That is why shrinking `num_layers` below the `10m` preset barely moves the total — to go
+meaningfully smaller you need a smaller vocabulary, not fewer layers. `make config` prints
+this breakdown for whatever size you have selected.
+
+## Choosing an attention kernel
 
 ```bash
-./scripts/workflow.sh data
+ATTN_IMPL=sdpa make train    # F.scaled_dot_product_attention — the default
+ATTN_IMPL=naive make train   # explicit nn.MultiheadAttention — the original implementation
 ```
 
-Optional dataset audit before training:
+Same math, different memory-access pattern — see
+[Chapter 25 — Efficient Attention: Flash Attention and SDPA](../../docs/llm-engineering/25_efficient_attention_flash_and_sdpa.md)
+for the mechanism. `sdpa` is the default (measured faster than `naive` for this project's
+sizes on Apple Silicon MPS — see [docs/TRAINING_SCHEDULE.md](docs/TRAINING_SCHEDULE.md));
+`naive` remains available as an explicit opt-out, e.g. to reproduce results predating the
+switch.
+
+Resuming across a *different* `ATTN_IMPL` than the checkpoint was saved with remaps the
+attention weights automatically (same values, different parameter names) — no progress
+lost, no flag needed; see `checkpoint.remap_attn_impl`. The trainer prints which kernel is
+actually active at the start of every run (`attn_impl=...` in the startup line), and if a
+remap happens it prints that too — always check this line rather than assuming, especially
+after resuming a run that predates a switch.
+
+## Layout
+
+```
+src/gpt/
+├── config.py          # every knob: presets, hyperparameters, paths
+├── model.py           # the architecture (TinyGPT and its parts)
+├── checkpoint.py      # atomic save/load; checkpoints carry their own architecture
+├── runtime.py         # device selection (cuda / mps / cpu)
+├── data/
+│   ├── sources.py     # the dataset registry — what we train on
+│   ├── prepare.py     # download, parse, filter, split
+│   ├── dataset.py     # tokenize, batch, loss
+│   ├── prompts.py     # held-out prompt loading
+│   └── audit.py       # corpus quality gate
+├── training/trainer.py
+├── inference/
+│   ├── generate.py    # sampling + generation loop (one implementation, shared)
+│   └── server.py      # FastAPI app
+├── evaluation/quality.py
+└── cli/               # thin argparse entrypoints -> console scripts
+```
+
+One model, assembled from its parts — `TinyGPT` is the only class you construct:
+
+```
+TinyGPT                       the model you train and talk to
+ ├─ token_emb / pos_emb
+ ├─ blocks: GPTBlock × N
+ │   ├─ CausalSelfAttention    tokens look at earlier tokens
+ │   └─ MLP                    each token processed independently
+ └─ ln_f + lm_head             final norm → next-token logits
+```
+
+Console scripts (`gpt-config`, `gpt-data`, `gpt-audit`, `gpt-train`, `gpt-infer`,
+`gpt-serve`, `gpt-eval`) are what the `make` targets call; use them directly for finer
+control, e.g. `uv run gpt-infer --prompt "The quick brown fox" --max-new-tokens 100`.
+
+## Training objective: raw, not instruction-tuned
+
+Training is plain next-token prediction over **every** token — the same objective that
+pretrains a base model like GPT-2. There is no chat template and no per-turn loss
+masking, even though the corpus contains chat transcripts.
+
+The consequence is worth understanding: this produces a **base model**, not a turn-taking
+assistant. Prompted with `User: how do I...`, it continues the transcript and may write
+the next `User:` turn itself, because that is what the training text does. Making it
+behave like an assistant would require instruction tuning as a separate stage.
+
+## Data
+
+Five datasets — UltraChat 200k, OASST1, Dolly 15k, SmolTalk, and (gated) LMSYS-Chat-1M —
+merged through schema-aware parsing and quality filters into `data/train.txt`.
+
+Full detail, including per-dataset licensing, the filter thresholds and why each exists,
+and the complete raw-data-to-`train.txt` pipeline: **[docs/DATASETS.md](docs/DATASETS.md)**.
 
 ```bash
-./scripts/workflow.sh audit
+gpt-data --list     # the registry, printed from code
+make audit          # corpus quality gate before a long run
 ```
 
-Single script to download + merge + parse all conversational datasets:
+## Start, stop, and resume training
 
 ```bash
-HF_TOKEN=hf_xxx ./scripts/prepare_all_datasets.sh
+make train                     # start (or resume, if a checkpoint already exists)
 ```
-
-This script:
-- downloads public datasets (`UltraChat`, `OASST1`, `Dolly`, `SmolTalk`)
-- optionally downloads gated `lmsys/lmsys-chat-1m` (`INCLUDE_GATED_LMSYS=1`)
-- merges parquet inputs
-- writes `data/train.txt`, `data/test.txt`, `data/test_prompts.txt`
-
-Skip gated LMSYS if needed:
 
 ```bash
-INCLUDE_GATED_LMSYS=0 ./scripts/prepare_all_datasets.sh
+# stop: press Ctrl-C at any time
 ```
-
-Add another dataset (optional) while generating data:
+`gpt-train` catches the interrupt, saves `checkpoints/<label>/latest.pt`, and exits —
+`make` then prints `Error 130`, which is just the interrupt signal propagating through
+`make`, not a failed run. The checkpoint from the step you stopped at is already safely
+on disk before that message appears.
 
 ```bash
-EXTRA_DATASET='HuggingFaceH4/ultrachat_200k' EXTRA_SPLIT='train_sft' ./scripts/workflow.sh data
+make train                     # resume: re-run the same command, picks up from latest.pt
 ```
-
-Or add another local parquet dataset:
+Resuming is the *default* behavior of `make train` — it happens automatically whenever
+`checkpoints/<label>/latest.pt` exists, no flag needed. The resumed run also verifies the
+checkpoint's saved architecture matches the current config before loading, so resuming
+after an accidental preset/override change fails loudly instead of silently corrupting
+the run.
 
 ```bash
-EXTRA_LOCAL_PARQUET_GLOB='/path/to/another_dataset/*.parquet' ./scripts/workflow.sh data
+make train-fresh               # start over, ignoring any existing checkpoint
+# or, equivalently:
+RESUME_TRAINING=0 make train
 ```
+Use this when you deliberately want to discard progress and retrain from step 0 under the
+same label — otherwise `make train` always continues where the last run left off.
 
-3) Train
+See [Chapter 27 — Checkpointing and Resuming Training](../../docs/llm-engineering/27_checkpointing_and_resuming_training.md)
+for why this is safe (atomic saves, self-describing checkpoints) and
+[docs/MIGRATION.md](docs/MIGRATION.md) for resuming on a *different* machine.
+
+### Running in the background
+
+`make train` runs in the foreground and ties up the terminal for the whole run. Use
+`make train-bg` to start it detached instead — same env-var overrides as `make train`
+(`GPT_PRESET`, `ATTN_IMPL`, etc.) apply unchanged:
 
 ```bash
-./scripts/workflow.sh train
+make train-bg                              # detached, using whatever ATTN_IMPL/GPT_PRESET defaults apply
+GPT_PRESET=30m ATTN_IMPL=sdpa make train-bg # or override the same way you would for `make train`
 ```
-
-Training auto-resumes from `tiny_llm_checkpoint_latest.pt` if present.
-Use `Ctrl+C` to stop safely; the script now writes a resumable latest checkpoint before exit.
-
-4) Inference test
 
 ```bash
-./scripts/workflow.sh infer
+make train-status   # is it running? PID + the last progress line
+make train-stop      # stop it gracefully (SIGINT — saves checkpoints/<label>/latest.pt, same as Ctrl-C)
+make train-logs       # tail -f the live output
 ```
 
-5) Run quality evaluation
+`make train-bg` refuses to start if a `gpt-train` process is already running — see
+"Only one run at a time" below for why this guard exists. `make train-stop` sends
+`SIGINT`, not `SIGKILL`/`kill -9`, specifically because `SIGKILL` skips the interrupt
+handler that saves `latest.pt`.
+
+Under the hood, `train-bg` is exactly:
 
 ```bash
-./scripts/workflow.sh eval
+nohup uv run gpt-train > logs/train_stdout.log 2>&1 &
 ```
 
-6) Start API server
+— `nohup` so it survives the terminal closing, output redirected to
+`logs/train_stdout.log` instead of lost. If you're driving this from a script/agent rather
+than an interactive shell and want it fully detached from the current shell's job table
+too, add `disown` right after.
+
+### Preventing the machine from sleeping mid-run
+
+`nohup`/`make train-bg` keeps the *process* alive if the terminal closes — it does
+nothing to stop the *machine* from sleeping. This matters more than it sounds like:
+`total_training_hours` (`logs/train_eval_history_<label>.csv`, and `tqdm`'s `total_h`) is
+computed from wall-clock time (`time.time()` deltas in `training/trainer.py`'s
+`elapsed()`), which cannot tell "the GPU/CPU was actually computing" apart from "the
+machine was asleep and this background process got almost no scheduling time." A laptop
+left to sleep overnight mid-run doesn't cleanly pause — it typically keeps the process
+alive but severely throttled (a handful of steps trickling through every several
+minutes instead of a hard stop), and every minute of that gets silently counted as
+"training time" in the log, right alongside minutes that were genuinely at full speed.
+This is a real, measured failure mode this project hit, not a hypothetical one — a
+`~30 steps/sec` run near-stalled to a fraction of a step/sec for several hours overnight,
+with `total_training_hours` reporting the full elapsed duration as if it had all been
+productive.
+
+The fix is to explicitly keep the machine awake for the duration of the run — every OS
+has a way to do this, scoped to just the training process so nothing needs to be manually
+undone afterward:
+
+**macOS** — `caffeinate`, built in, no install needed:
 
 ```bash
-./scripts/workflow.sh serve
+caffeinate -i uv run gpt-train                                       # foreground
+caffeinate -i nohup uv run gpt-train > logs/train_stdout.log 2>&1 &   # background
 ```
 
-## Google Colab Compatibility
+`-i` prevents idle sleep (the display can still turn off; the machine won't suspend).
+Wrapping the command ties the awake-request to it directly — `caffeinate` exits the
+moment `gpt-train` does, automatically releasing the sleep-prevention with nothing to
+remember to undo.
 
-The project is compatible with Colab as-is after these steps:
-
-1. Clone and install deps:
-```bash
-!git clone <your-repo-url>
-%cd mini-llms-playground/from_scratch/custom-gpt-153m
-!pip install -r requirements.txt
-```
-
-2. Prepare data:
-```bash
-!bash scripts/prepare_all_datasets.sh
-```
-If using gated LMSYS in Colab:
-```bash
-import os
-os.environ["HF_TOKEN"] = "hf_xxx"
-```
-
-3. Train:
-```bash
-!bash scripts/workflow.sh train
-```
-
-4. Evaluate:
-```bash
-!bash scripts/workflow.sh eval
-```
-
-All paths in scripts are relative (for example `data/raw/...`, `data/train.txt`, `logs/...`), so no machine-specific absolute path is required.
-
-## Resume Across Machines (GPU <-> Mac)
-
-You can train on a GPU machine, copy checkpoints, and resume on Mac (or switch back later).
-
-See `docs/MIGRATION.md` for:
-- exact files to copy
-- `rsync`/`scp` commands
-- resume commands
-- pre-resume validation checklist
-
-## Quality Tracking (Long Training Runs)
-
-To verify that quality is actually improving over days/weeks:
-
-1. Use training eval history from `tiny_llm.py`:
-- File: `logs/train_eval_history.csv`
-- Logged every `eval_interval` steps with:
-  - `train_loss`
-  - `test_loss`
-  - `test_perplexity`
-  - `best_test_loss`
-  - `step`, `est_epoch`, `processed_tokens`, `total_training_hours`
-
-2. Use checkpoint quality trend:
-- Command:
-```bash
-./scripts/workflow.sh eval
-```
-- File: `logs/quality_history.jsonl`
-- Script compares against previous run and prints delta.
-
-3. Use dataset audit gate before long runs:
-- Command:
-```bash
-./scripts/workflow.sh audit
-```
-- Verify:
-  - `noise_line_rate < 0.01`
-  - `ascii_ratio > 0.98`
-  - `assistant_exact_overlap_rate_vs_test` near `0.0`
-
-Recommended acceptance signals:
-- `best_test_loss` trends down over time.
-- `heuristic_quality_score_0_to_100` trends up (or at least stable while loss drops).
-- `role_leak_rate` and `placeholder_noise_rate` trend down.
-
-If loss improves but quality score degrades, it usually means data quality/format noise is hurting generation quality.
-
-## Conversational Datasets (Access)
-
-- `HuggingFaceH4/ultrachat_200k`: public
-- `OpenAssistant/oasst1`: public
-- `zidankhan/databricks-dolly-15k`: public
-- `HuggingFaceTB/smoltalk`: public (compact multi-domain chats)
-- `allenai/tulu-v2-sft-mixture`: public (instruction/chat mixture)
-- `lmsys/lmsys-chat-1m`: gated (public card, file access requires accepting terms + login)
-
-Public dataset mix example:
+**Linux** — `systemd-inhibit`, built in on any systemd-based distro (which covers
+essentially every modern desktop distro — Ubuntu, Fedora, Debian, and derivatives):
 
 ```bash
-EXTRA_DATASET='HuggingFaceH4/ultrachat_200k' EXTRA_SPLIT='train_sft' ./scripts/workflow.sh data
+systemd-inhibit --what=idle:sleep --why="gpt-train run" uv run gpt-train
 ```
 
-Another public dataset example:
+Same scoping behavior as `caffeinate` — the inhibitor lock is held only while the wrapped
+command runs. This mainly matters on a Linux **laptop/desktop**; a headless remote GPU
+box (the other half of [`docs/MIGRATION.md`](docs/MIGRATION.md)'s workflow) generally
+isn't configured to suspend on idle in the first place, so this is rarely needed there.
 
-```bash
-EXTRA_DATASET='OpenAssistant/oasst1' EXTRA_SPLIT='train' ./scripts/workflow.sh data
+**Windows** — no single built-in CLI equivalent; two real options:
+
+```powershell
+# Option 1: Microsoft PowerToys' Awake module (free, official, closest match to
+# caffeinate — keeps the system awake exactly as long as a given process ID is alive)
+awake.exe --pid <gpt-train's PID>
+
+# Option 2: no extra install, but NOT auto-scoped — you must remember to revert it
+# after the run, unlike the two options above:
+powercfg /change standby-timeout-ac 0    # before starting training
+powercfg /change standby-timeout-ac 30   # revert afterward (30 = whatever it was before)
 ```
 
-## Hugging Face Token (for gated datasets)
+PowerToys' `Awake` is the closer match in behavior (tied to the process, not a manual
+system-wide setting) and is Microsoft-maintained — prefer it over the `powercfg` fallback
+when it's available.
 
-How to get token:
+### Only one run at a time
 
-1. Go to https://huggingface.co/settings/tokens
-2. Click **New token**
-3. Select at least **Read** permission
-4. Create and copy token (starts with `hf_...`)
+`make train`, `make train-fresh`, and `make train-bg` all refuse to start if a `gpt-train`
+process is already running (checked via `pgrep`) — this isn't a style preference, it's a
+direct response to a real, measured incident on this project: two `gpt-train` processes
+resumed from the same checkpoint and left running concurrently don't fail loudly, they
+silently race to write `checkpoints/<label>/latest.pt` and `best.pt`, each getting
+roughly half the GPU (a real, measured ~2x throughput drop when this happened once here),
+and whichever process saves last silently wins, discarding the other's progress. If you
+ever bypass `make` and invoke `uv run gpt-train` / `nohup ...` directly, that guard
+doesn't apply — check `make train-status` first.
 
-Use it one of these ways:
+## Checkpoints
 
-```bash
-export HF_TOKEN=hf_xxx
+Namespaced per model size, so multiple sizes coexist:
+
+```
+checkpoints/<label>/
+├── best.pt       # lowest test loss
+├── latest.pt     # periodic, for resuming
+├── serving.pt    # what the API serves
+└── final.pt      # end of a completed run
 ```
 
-or interactive login:
+Every checkpoint stores its own architecture (`embed_size`, `num_layers`, …), so loading
+never requires telling the code what size it was — and resuming with a mismatched config
+is detected and refused rather than silently corrupting a run.
 
-```bash
-hf auth login
-hf auth whoami
-```
+Saves are atomic (write to `.tmp`, then rename), so interrupting training cannot leave a
+truncated checkpoint behind.
 
-After login, simplest full download + parse flow:
+## Monitoring a long run
 
-```bash
-./scripts/prepare_all_datasets.sh
-```
+- `logs/train_eval_history_<label>.csv` — train/test loss, perplexity, tokens, wall-clock,
+  appended every `eval_interval` steps.
+- `make eval` — heuristic generation-quality report (empty output, repetition, ASCII
+  noise, role leakage) appended to `logs/quality_history_<label>.jsonl`, with a delta
+  against the previous run.
 
-Download gated dataset parquet files by code (no manual web download):
+Loss dropping while the quality score falls usually means data-format noise is hurting
+generation — check `make audit`.
 
-```bash
-python prepare_dataset_lmsys.py \
-  --dataset lmsys/lmsys-chat-1m \
-  --token "$HF_TOKEN" \
-  --download-parquet-dir data/lmsys/lmsys-chat-1m \
-  --download-only
-```
+**"Is `steps: int = 1_000_000` the right target, and should I raise it?"** — see
+[docs/TRAINING_SCHEDULE.md](docs/TRAINING_SCHEDULE.md): what `step` actually counts here
+(a micro-batch, not an optimizer update), how it drives the warmup/cosine LR schedule, and
+a three-question framework for telling a real plateau from an artifact of where you are on
+the schedule or noisy eval sampling.
 
-Then build train/test from downloaded parquet:
+**"Does training for multiple epochs help?" / "Does arranging data in a particular way
+increase model performance?"** — see [docs/TRAINING_QA.md](docs/TRAINING_QA.md): this
+run's actual epoch math (≈2.95 epochs at the configured step budget), and why storage
+order in `train.txt` has zero effect on training (random-window sampling) while the
+`"\n\n"` conversation-boundary separator is a real, currently weak spot.
 
-```bash
-python prepare_dataset_lmsys.py \
-  --local-parquet-glob 'data/raw/lmsys_lmsys-chat-1m/**/*.parquet' \
-  --max-samples 300000
-```
+## Other docs
 
-## API example
-
-`POST /generate`
-
-```json
-{
-  "prompt": "System: You are a helpful coding assistant for docker workflows.\nUser: How can you assist me with container startup failures?\nAssistant:",
-  "max_new_tokens": 80,
-  "do_sample": true,
-  "temperature": 0.7,
-  "top_k": 30,
-  "top_p": 0.9,
-  "repetition_penalty": 1.15
-}
-```
-
-## Resume and Scheduled Training
-
-`tiny_llm.py` now supports:
-
-- periodic checkpoint save every `save_every_steps`
-- resume after interruption (`resume_training = True`)
-- best-checkpoint tracking by `test_loss`
-- cumulative wall-clock training time tracking across resumes (`total_training_seconds`)
-
-Stop and resume flow:
-
-1. Start training:
-```bash
-./scripts/workflow.sh train
-```
-2. Stop training safely:
-- Press `Ctrl+C`
-- Script saves `tiny_llm_checkpoint_latest.pt`
-3. Resume training later:
-```bash
-./scripts/workflow.sh train
-```
-4. Start fresh without resuming:
-```bash
-RESUME_TRAINING=0 ./scripts/workflow.sh train
-```
-
-To run daily at a fixed time on macOS/Linux with `cron` (example: 2:00 AM):
-
-```bash
-crontab -e
-```
-
-Add:
-
-```cron
-0 2 * * * cd /path/to/mini-llms-playground/from_scratch/custom-gpt-153m && /bin/zsh -lc './scripts/workflow.sh train >> logs/train.log 2>&1'
-```
-
-Create logs directory once:
-
-```bash
-mkdir -p logs
-```
+- [`../../docs/llm-engineering/`](../../docs/llm-engineering/00_roadmap.md) — the
+  from-first-principles curriculum every concept below links back to
+- [docs/DATASETS.md](docs/DATASETS.md) — every dataset, filter, and the corpus pipeline
+- [docs/API_SERVER.md](docs/API_SERVER.md) — serving endpoints
+- [docs/LLM_DEV_GUIDE.md](docs/LLM_DEV_GUIDE.md) — quickstart map: which curriculum
+  chapter covers each pipeline stage, plus this project's exact command for each
+- [docs/CODE_WALKTHROUGH.md](docs/CODE_WALKTHROUGH.md) — a file-by-file tour of `src/gpt/`
+  in execution order, explaining *why* each module is built the way it is, not just what
+  it does
+- [docs/MODEL_SIZING_GUIDE.md](docs/MODEL_SIZING_GUIDE.md) — every `ModelConfig` field:
+  what it costs in real parameters/compute, its hard limitations, and what value fits
+  which use case
+- [docs/MIGRATION.md](docs/MIGRATION.md) — moving a run between a GPU box and a laptop
+- [docs/TRAINING_SCHEDULE.md](docs/TRAINING_SCHEDULE.md) — what `steps` means, the LR
+  schedule, and judging whether a longer run still helps
+- [docs/TRAINING_QA.md](docs/TRAINING_QA.md) — running log of specific questions asked
+  while training this project's model, answered against its actual code and numbers
+- [docs/DATA_PREP_GUIDELINE.md](docs/DATA_PREP_GUIDELINE.md) — ranked checklist for
+  preparing a domain-specialized corpus for maximum quality-per-parameter, including the
+  tokenizer-vocab lever this project's own parameter breakdown motivates
+- [docs/BOOKS_CORPUS_INTEGRATION.md](docs/BOOKS_CORPUS_INTEGRATION.md) — running log of
+  enriching the corpus with book-derived text via `tools/corpus-extractor`, including the
+  boundary-marking and mix-ratio issues that make this more than "run the tool and merge"

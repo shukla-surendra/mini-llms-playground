@@ -91,6 +91,15 @@ exactly, so it can be copied straight into that project's `data/` folder.
 - **PDF extraction has no OCR.** `pdf-extract` reads a PDF's existing text layer; a
   scanned/image-only PDF correctly extracts to empty or near-empty text, not an error —
   there's no text there to extract without OCR, which this tool doesn't do.
+- **A single malformed file can't crash the batch, but it can still take a real toll on
+  output quality.** `pdf-extract` (and, defensively, the other format crates too) can
+  panic internally on unusual real-world input rather than returning an error — hit for
+  real on a PDF with an unusual `DeviceN` colorspace. `extract.rs`'s `catch_panic()`
+  catches this and reports it as a normal `[skip]`/`files failed to extract` entry
+  instead of ending the run, but a crate that panics on a case like this may also produce
+  subtly wrong (not just missing) text on other malformed input it doesn't panic on —
+  worth spot-checking output on a large, uncurated real-world folder, not just trusting
+  a clean `files failed to extract: 0`.
 - **EPUB reading order follows the book's spine**, not filename order — this is the
   same reading order an e-reader would use (`OEBPS/chapter2.xhtml` reading before
   `OEBPS/chapter10.xhtml` if the spine says so, regardless of what a naive

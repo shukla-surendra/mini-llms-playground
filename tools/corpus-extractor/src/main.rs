@@ -15,6 +15,13 @@ use cli::Args;
 use dataset::{BuildStats, Record};
 
 fn main() -> Result<()> {
+    // extract.rs's catch_panic() turns a panic during one file's extraction into a normal
+    // Result::Err, reported cleanly through the [skip] path below. Without silencing the
+    // default hook here, the raw "thread 'main' panicked at ..." message would still print
+    // to stderr for every caught panic too, ahead of and independent of our own message —
+    // noisy and redundant now that it's handled, not a crash.
+    std::panic::set_hook(Box::new(|_| {}));
+
     let args = Args::parse();
 
     if !args.input.is_dir() {
