@@ -115,7 +115,7 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
             f"to fit the available corpus."
         )
 
-    attn_impl = os.getenv("ATTN_IMPL", "naive")
+    attn_impl = os.getenv("ATTN_IMPL", "sdpa")
     model = TinyGPT.from_config(model_cfg, context_length=ctx_len, attn_impl=attn_impl).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay

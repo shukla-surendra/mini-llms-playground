@@ -1,0 +1,22 @@
+[package]
+name = "corpus-extractor"
+version = "0.1.0"
+edition = "2021"
+description = "Extract text from a folder (pdf, txt, md, rs, html, js, py) and build a token-chunked LLM training dataset (JSONL + optional plain text, train/test split)."
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+rand = "0.8"
+indicatif = "0.17"
+tiktoken-rs = "0.5"
+pdf-extract = "0.7"
+html2text = "0.6"
+epub = "2.1.5"
+
+[profile.release]
+opt-level = 3
+lto = true

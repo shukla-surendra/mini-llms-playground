@@ -99,6 +99,27 @@ That is why shrinking `num_layers` below the `10m` preset barely moves the total
 meaningfully smaller you need a smaller vocabulary, not fewer layers. `make config` prints
 this breakdown for whatever size you have selected.
 
+## Choosing an attention kernel
+
+```bash
+ATTN_IMPL=sdpa make train    # F.scaled_dot_product_attention — the default
+ATTN_IMPL=naive make train   # explicit nn.MultiheadAttention — the original implementation
+```
+
+Same math, different memory-access pattern — see
+[Chapter 25 — Efficient Attention: Flash Attention and SDPA](../../docs/llm-engineering/25_efficient_attention_flash_and_sdpa.md)
+for the mechanism. `sdpa` is the default (measured faster than `naive` for this project's
+sizes on Apple Silicon MPS — see [docs/TRAINING_SCHEDULE.md](docs/TRAINING_SCHEDULE.md));
+`naive` remains available as an explicit opt-out, e.g. to reproduce results predating the
+switch.
+
+Resuming across a *different* `ATTN_IMPL` than the checkpoint was saved with remaps the
+attention weights automatically (same values, different parameter names) — no progress
+lost, no flag needed; see `checkpoint.remap_attn_impl`. The trainer prints which kernel is
+actually active at the start of every run (`attn_impl=...` in the startup line), and if a
+remap happens it prints that too — always check this line rather than assuming, especially
+after resuming a run that predates a switch.
+
 ## Layout
 
 ```
@@ -195,6 +216,51 @@ See [Chapter 27 — Checkpointing and Resuming Training](../../docs/llm-engineer
 for why this is safe (atomic saves, self-describing checkpoints) and
 [docs/MIGRATION.md](docs/MIGRATION.md) for resuming on a *different* machine.
 
+### Running in the background
+
+`make train` runs in the foreground and ties up the terminal for the whole run. Use
+`make train-bg` to start it detached instead — same env-var overrides as `make train`
+(`GPT_PRESET`, `ATTN_IMPL`, etc.) apply unchanged:
+
+```bash
+make train-bg                              # detached, using whatever ATTN_IMPL/GPT_PRESET defaults apply
+GPT_PRESET=30m ATTN_IMPL=sdpa make train-bg # or override the same way you would for `make train`
+```
+
+```bash
+make train-status   # is it running? PID + the last progress line
+make train-stop      # stop it gracefully (SIGINT — saves checkpoints/<label>/latest.pt, same as Ctrl-C)
+make train-logs       # tail -f the live output
+```
+
+`make train-bg` refuses to start if a `gpt-train` process is already running — see
+"Only one run at a time" below for why this guard exists. `make train-stop` sends
+`SIGINT`, not `SIGKILL`/`kill -9`, specifically because `SIGKILL` skips the interrupt
+handler that saves `latest.pt`.
+
+Under the hood, `train-bg` is exactly:
+
+```bash
+nohup uv run gpt-train > logs/train_stdout.log 2>&1 &
+```
+
+— `nohup` so it survives the terminal closing, output redirected to
+`logs/train_stdout.log` instead of lost. If you're driving this from a script/agent rather
+than an interactive shell and want it fully detached from the current shell's job table
+too, add `disown` right after.
+
+### Only one run at a time
+
+`make train`, `make train-fresh`, and `make train-bg` all refuse to start if a `gpt-train`
+process is already running (checked via `pgrep`) — this isn't a style preference, it's a
+direct response to a real, measured incident on this project: two `gpt-train` processes
+resumed from the same checkpoint and left running concurrently don't fail loudly, they
+silently race to write `checkpoints/<label>/latest.pt` and `best.pt`, each getting
+roughly half the GPU (a real, measured ~2x throughput drop when this happened once here),
+and whichever process saves last silently wins, discarding the other's progress. If you
+ever bypass `make` and invoke `uv run gpt-train` / `nohup ...` directly, that guard
+doesn't apply — check `make train-status` first.
+
 ## Checkpoints
 
 Namespaced per model size, so multiple sizes coexist:
@@ -245,8 +311,17 @@ order in `train.txt` has zero effect on training (random-window sampling) while 
 - [docs/API_SERVER.md](docs/API_SERVER.md) — serving endpoints
 - [docs/LLM_DEV_GUIDE.md](docs/LLM_DEV_GUIDE.md) — quickstart map: which curriculum
   chapter covers each pipeline stage, plus this project's exact command for each
+- [docs/CODE_WALKTHROUGH.md](docs/CODE_WALKTHROUGH.md) — a file-by-file tour of `src/gpt/`
+  in execution order, explaining *why* each module is built the way it is, not just what
+  it does
+- [docs/MODEL_SIZING_GUIDE.md](docs/MODEL_SIZING_GUIDE.md) — every `ModelConfig` field:
+  what it costs in real parameters/compute, its hard limitations, and what value fits
+  which use case
 - [docs/MIGRATION.md](docs/MIGRATION.md) — moving a run between a GPU box and a laptop
 - [docs/TRAINING_SCHEDULE.md](docs/TRAINING_SCHEDULE.md) — what `steps` means, the LR
   schedule, and judging whether a longer run still helps
 - [docs/TRAINING_QA.md](docs/TRAINING_QA.md) — running log of specific questions asked
   while training this project's model, answered against its actual code and numbers
+- [docs/DATA_PREP_GUIDELINE.md](docs/DATA_PREP_GUIDELINE.md) — ranked checklist for
+  preparing a domain-specialized corpus for maximum quality-per-parameter, including the
+  tokenizer-vocab lever this project's own parameter breakdown motivates

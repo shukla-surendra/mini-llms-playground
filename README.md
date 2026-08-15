@@ -51,6 +51,14 @@ architecture, pretraining, fine-tuning, and serving, from layman's terms up to a
 depth, with every concept grounded in this repo's actual code. Start there if you want to
 understand LLMs, not just run this repo's scripts.
 
+## Tools
+
+[`tools/corpus-extractor`](tools/corpus-extractor/) — a standalone Rust CLI, not a
+training track: turns an arbitrary local folder (`.pdf`/`.epub`/`.txt`/`.md`/`.rs`/
+`.html`/`.js`/`.py`) into a GPT-2-token-chunked training dataset (JSONL + plain text,
+train/test split) — the local-folder complement to the from-scratch track's
+Hugging-Face-dataset pipeline.
+
 ## Full docs
 
 See [`docs/README.md`](docs/README.md) for a fuller comparison of the two tracks, when to

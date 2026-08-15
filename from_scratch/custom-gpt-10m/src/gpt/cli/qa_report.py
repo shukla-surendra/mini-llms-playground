@@ -181,7 +181,10 @@ def main():
         description="Run a curated Q&A prompt set and render an HTML report."
     )
     parser.add_argument("--preset", default=None, help="Model size preset to load")
-    parser.add_argument("--max-new-tokens", type=int, default=120)
+    parser.add_argument("--max-new-tokens", type=int, default=200,
+                         help="Generation token budget. Completions are trimmed back "
+                              "to the last full sentence (see postprocess_completion), "
+                              "so a bigger budget leaves less on the floor.")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--top-p", type=float, default=0.9)

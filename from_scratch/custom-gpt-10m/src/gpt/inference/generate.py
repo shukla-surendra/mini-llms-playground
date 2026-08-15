@@ -4,7 +4,11 @@ Training, the CLI, the API server, and evaluation all generate through
 generate_text() so sampling behavior can never diverge between them.
 """
 
+import re
+
 import torch
+
+_SENTENCE_END_RE = re.compile(r'[.!?][\'")\]]*(?=\s|$)')
 
 
 def apply_repetition_penalty(next_logits, ids, penalty=1.0, window_size=None):
@@ -46,9 +50,23 @@ def sample_next_token(logits, do_sample=True, temperature=1.0, top_k=None, top_p
     return torch.multinomial(probs, num_samples=1)
 
 
+def _trim_to_complete_sentence(text):
+    """Trim back to the last '.'/'!'/'?' so callers never see a completion that
+    stops mid-word. generate_text's loop has no early-stop condition — it always
+    runs exactly max_new_tokens steps and returns whatever that lands on, which is
+    as likely to be mid-word as at a sentence boundary. If no sentence end is found
+    at all (very short/degenerate completions), return the text unchanged rather
+    than trimming it to nothing."""
+    matches = list(_SENTENCE_END_RE.finditer(text))
+    if not matches:
+        return text
+    return text[:matches[-1].end()].rstrip()
+
+
 def postprocess_completion(text):
-    """Trim a chat-style completion at the next role marker, and drop a leading
-    'Assistant:' echo if the model reproduced it."""
+    """Trim a chat-style completion at the next role marker, drop a leading
+    'Assistant:' echo if the model reproduced it, and trim any trailing sentence
+    fragment left by running out of the generation token budget."""
     cleaned = text.lstrip()
     if cleaned.startswith("Assistant:"):
         cleaned = cleaned[len("Assistant:"):].lstrip()
@@ -56,7 +74,7 @@ def postprocess_completion(text):
         idx = cleaned.find(marker)
         if idx != -1:
             cleaned = cleaned[:idx]
-    return cleaned.strip()
+    return _trim_to_complete_sentence(cleaned.strip())
 
 
 @torch.no_grad()

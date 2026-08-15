@@ -46,6 +46,7 @@ target.
 | [`README.md`](../from_scratch/custom-gpt-10m/README.md) | Parameter-count breakdown for the shrunk config, `uv`/`make`-based quickstart |
 | [`docs/DATASETS.md`](../from_scratch/custom-gpt-10m/docs/DATASETS.md) | The five-source corpus, filters, and the raw-data-to-`train.txt` pipeline |
 | [`docs/LLM_DEV_GUIDE.md`](../from_scratch/custom-gpt-10m/docs/LLM_DEV_GUIDE.md) | Quickstart map: which [`llm-engineering/`](llm-engineering/00_roadmap.md) chapter covers each pipeline stage, plus this project's exact command for each |
+| [`docs/CODE_WALKTHROUGH.md`](../from_scratch/custom-gpt-10m/docs/CODE_WALKTHROUGH.md) | File-by-file tour of `src/gpt/` in execution order — why each module is built the way it is |
 | [`docs/API_SERVER.md`](../from_scratch/custom-gpt-10m/docs/API_SERVER.md) | Running and calling the FastAPI serving endpoint (mechanism: [Chapter 22](llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)) |
 | [`docs/MIGRATION.md`](../from_scratch/custom-gpt-10m/docs/MIGRATION.md) | Moving a training run between a cloud GPU machine and a local Mac (mechanism: [Chapter 27](llm-engineering/27_checkpointing_and_resuming_training.md)) |
 
