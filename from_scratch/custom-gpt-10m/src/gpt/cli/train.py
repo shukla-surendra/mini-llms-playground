@@ -10,7 +10,7 @@ from ..training import train as run_training
 def main():
     parser = argparse.ArgumentParser(description="Train the model.")
     parser.add_argument("--preset", default=None,
-                        help="Model size preset (default: $GPT_PRESET or '10m')")
+                        help="Model size preset (default: $GPT_PRESET or '50m')")
     parser.add_argument("--no-resume", action="store_true",
                         help="Ignore existing checkpoints and start fresh")
     args = parser.parse_args()

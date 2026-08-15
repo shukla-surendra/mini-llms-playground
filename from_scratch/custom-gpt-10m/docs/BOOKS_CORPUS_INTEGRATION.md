@@ -1,4 +1,8 @@
-# Books Corpus Integration: A Running Log
+# Books (and Repo Source) Corpus Integration: A Running Log
+
+Scope grew past just books partway through (Step 5) — this doc's filename is now
+slightly narrower than its actual content, kept as-is rather than renamed to avoid
+breaking the cross-links from `README.md`/`CODE_WALKTHROUGH.md`/`LLM_DEV_GUIDE.md`.
 
 Tracking the actual steps of enriching this project's training corpus with book-derived
 text via [`tools/corpus-extractor`](../../../tools/corpus-extractor/), source material:
@@ -12,6 +16,86 @@ This is a genuinely different goal from
 docs aren't read as the same effort: that doc is about **narrowing** to one specialized
 domain. This is about **enriching** the existing general corpus with more diverse,
 structurally-coherent, factually-real prose — a broader, not narrower, move.
+
+## Step 4 — targeting `50m` instead of `10m`: three more real bugs found and fixed
+
+After the `10m` run's `best_test_loss` plateaued well above its pre-merge best for 46k+
+steps with no recovery (see the "13 hours" / "1.5 hours" investigation elsewhere in this
+project's history), the decision was made to stop chasing `10m` and build the best
+possible corpus for a `50m` run instead — `50m`'s `embed_size=512` sits right at this
+project's own computed embedding/block parameter balance point
+([`MODEL_SIZING_GUIDE.md`](MODEL_SIZING_GUIDE.md)), unlike `10m`'s deeply
+embedding-dominated `160`.
+
+Rebuilding surfaced three more real, independent bugs — none introduced by this pass,
+all pre-existing and silently costing real data:
+
+1. **Generic parquet-availability fix.** Not every HF dataset repo publishes parquet on
+   its main branch — `databricks/databricks-dolly-15k` (and its `zidankhan` mirror, the
+   one actually registered) only ever shipped a raw `.jsonl` file. Hugging Face
+   auto-converts every public dataset to parquet regardless, published at a standard
+   `refs/convert/parquet` ref — `prepare.py`'s `download_source()` now falls back to that
+   ref whenever the main branch has none, which fixes *any* future JSONL-only source the
+   same way, not just this one.
+2. **OASST1 tree reconstruction.** Its real raw schema is a flat table of individual
+   messages forming reply trees (`message_id`/`parent_id`/`rank`), not the list-of-dicts
+   shape every other "conversation"-schema source uses — structurally unparseable by the
+   generic `extract_turns()` dispatch, confirmed empirically (0 conversations, silently).
+   `prepare.py`'s new `load_oasst_conversations()` reconstructs one linear conversation
+   per tree, walking from each root and picking the best-ranked reply at each branch
+   (rank 0 = highest quality, per OASST1's own human ranking) — English-only, matching
+   the rest of this corpus. `sources.py`'s OASST1 entry now correctly declares
+   `schema="oasst_tree"`, dispatched separately from the generic loader.
+3. **`min_turns=3` was silently killing every single-turn source.** Dolly's
+   `extract_turns_instruction()` (and `HuggingFaceH4/no_robots`'s, mostly) always
+   produces exactly 2 turns — one prompt, one reply. `build_corpus()`'s old default of
+   `min_turns=3` meant **100%** of single-turn instruction data was discarded, not just
+   unusually short multi-turn conversations, which is presumably what the threshold was
+   meant to catch. Lowered the default to `2` — the real minimum for "a conversation
+   happened at all" — after confirming the bug directly (`min_turns=3` → 0 Dolly
+   conversations parsed from a file that parses to 76/100 at `min_turns=2`, from the
+   *same* input).
+
+Also added [`HuggingFaceH4/no_robots`](https://huggingface.co/datasets/HuggingFaceH4/no_robots)
+as a genuinely new source (not a recovery) — ~9.5k entirely human-written prompts and
+replies across 10 categories, no model anywhere in the loop, unlike UltraChat/SmolTalk's
+synthetic generation. **License: CC BY-NC 4.0 — non-commercial use only**, flagged the
+same way this registry already flags LMSYS's gated status and UltraChat's OpenAI-terms
+question.
+
+Books were also **re-extracted at `--chunk-tokens 1024`** (was `512`, matching `10m`'s
+context) to match `50m`'s `context_length=1024` — 48,912 chunks, down from 97,621 at the
+smaller size (same books, roughly half as many chunks since each is twice as long).
+
+**Final corpus, all fixes applied, real numbers:**
+
+```
+HuggingFaceH4/ultrachat_200k   100,000 conversations
+OpenAssistant/oasst1              3,446 conversations   (0 before the tree-reconstruction fix)
+zidankhan/databricks-dolly-15k   12,173 conversations   (0 before the min_turns fix)
+HuggingFaceTB/smoltalk          100,000 conversations
+HuggingFaceH4/no_robots          17,110 conversations   (new source)
+lmsys/lmsys-chat-1m                    0 conversations   (gated, no HF_TOKEN — expected)
+                                 --------
+TOTAL chat                      232,729 conversations
+book documents (1024-token)      48,912
+
+train.txt: 209,783,994 tokens  (209,456 chat + 44,020 book docs)
+test.txt:   23,438,110 tokens  ( 23,273 chat +  4,892 book docs)
+total:     233,222,104 tokens
+```
+
+Six sources now genuinely contributing (five real + one correctly-excluded-gated), not
+two — the "5-source" documentation gap flagged in Step 3 is now actually closed, not
+just noted.
+
+(A `data/backup_pre_50m_corpus/` was made at this point but turned out to be a mislabeled
+duplicate, not a real snapshot — removed in Step 5 below, where the mistake was caught;
+`data/backup_pre_books_merge/` remains the one backup that actually matters.)
+Verified end-to-end against the real files before calling this done: `encode_raw()` at
+`allowed_special`, `effective_context_length` at `1024`, and `get_batch()` all run
+cleanly against the actual `train.txt`/`test.txt` on disk, not just the numbers reported
+by `gpt-data`.
 
 ## Why this isn't just "run the tool and merge the output"
 
@@ -151,3 +235,98 @@ before this rewrite — the paused `10m` (step 481,399) and `custom-e512-l6-h8-c
 (step ~7,226) checkpoints would silently train against different data than they started
 with if ever resumed after this point; restore the backup first if that matters for a
 specific resume.
+
+## Step 5 — merged in three more repos' `.rs`/`.md`/`.py` source
+
+Added `~/projects/2026/eng-skills`, `~/projects/2026/OxideOS`, and
+`~/projects/2026/platform-lab` — `corpus-extractor` run on each separately
+(`--extensions rs,md,py --chunk-tokens 1024`, matching `50m`'s `context_length`), all
+three clean (zero failed files, zero panics):
+
+```
+eng-skills:    114 files ->  1,216 chunks  (1,211 md,   5 py)
+OxideOS:       206 files ->  1,051 chunks  (  165 md, 886 rs)
+platform-lab:  870 files ->  2,231 chunks  (1,766 md, 335 py, 130 rs)
+```
+
+`private_profile/` was deliberately **not** included — real employer/client identifiers
+live there by design (see the global privacy convention in `~/.claude/CLAUDE.md`), and
+it wasn't part of what was actually asked for.
+
+**The `--books-jsonl` flag became `--extra-jsonl` (repeatable)** — the old name stopped
+being accurate the moment a second, non-book source existed. `gpt-data` now takes
+`--extra-jsonl` multiple times to pool several `corpus-extractor` runs into one build in
+a single pass, rather than requiring a manual `cat` of JSONL files beforehand.
+`prepare.py`'s `load_book_chunks()` renamed to `load_extra_documents()` to match — it
+was always source-agnostic (just reads a `{"text": ...}` JSONL), only the name implied
+otherwise.
+
+**A backup-labeling mistake, corrected rather than left**: the intermediate "chat +
+books, no repos" corpus state (from Step 3/4) was never actually captured in a real
+backup — the two directories that were supposed to hold it
+(`data/backup_pre_50m_corpus/`, `data/backup_pre_repos_merge/`) were both copied
+*after* later rewrites had already happened, making them byte-identical duplicates of
+other states rather than genuine snapshots of that specific point. Both removed rather
+than left around as misleading names. Nothing was actually lost — that intermediate
+state is exactly reproducible on demand (`seed=42`, deterministic):
+
+```bash
+uv run gpt-data --skip-download --extra-jsonl data/books_staging_1024/dataset.jsonl
+```
+
+The one backup that actually matters — `data/backup_pre_books_merge/`, the original,
+narrow, 2-real-source chat-only corpus from before any of this — is still correctly
+in place, untouched.
+
+**Final numbers, the corpus actually in `data/train.txt`/`data/test.txt` now**:
+
+```
+6 chat sources: UltraChat 100,000 + OASST1 3,446 + Dolly 12,173 + SmolTalk 100,000 +
+                No Robots 17,110 + LMSYS 0 (gated) = 232,729 conversations
+extra documents: 48,912 book chunks + 4,498 repo chunks = 53,410
+
+train.txt: 213,428,560 tokens  (209,456 chat + 48,069 extra docs)
+test.txt:   23,834,626 tokens  ( 23,273 chat +  5,341 extra docs)
+total:     237,263,186 tokens
+```
+
+## Step 6 — GSM8K (math reasoning) and Simple English Wikipedia (factual grounding)
+
+Both chosen against specific, observed weaknesses from this project's own QA reports
+(`reports/qa_report_10m_step*.html`) — the model attempting zero real arithmetic on word
+problems, and getting basic facts wrong (never naming Paris for "capital of France") —
+not general corpus growth for its own sake.
+
+**GSM8K** (`openai/gsm8k`, MIT): registered in `sources.py` as `schema="instruction"` —
+its `question`/`answer` columns are literally the exact keys
+`extract_turns_instruction()` already looks for, so this needed zero new parsing code,
+unlike OASST1/Dolly earlier. 16,860 conversations kept (both the `main` and `socratic`
+train splits). Answers include GSM8K's standard inline calculator annotations
+(`48/2=24`) — left as-is; that's explicit worked arithmetic, not noise.
+
+**Simple English Wikipedia** (`wikimedia/wikipedia`, config `20231101.simple`,
+CC-BY-SA-3.0/GFDL): not conversational, so it doesn't fit the chat-source registry —
+ingested the same way books/repos are, via a one-off chunking script
+(`ingest_wikipedia.py`, same GPT-2 tokenizer, same 1024-token/100-overlap window as
+`corpus-extractor`, same JSONL output shape) producing a file mergeable through the
+existing `--extra-jsonl` path with no new merge code. 241,787 articles, 45,756 stub
+articles (<200 chars) dropped, 222,029 chunks kept — **71,245,373 tokens**, notably
+larger than the ~37M initially estimated from raw file size alone.
+
+**A real, worth-stating-plainly composition shift**: extra documents (books + repos +
+Wikipedia) now number 275,439 — more than the 249,589 chat conversations, by raw
+document count. This corpus has moved further from "mostly chat-turn-shaped" than any
+previous step in this log. Proceeded because it was explicitly requested
+("add both and update dataset"), not silently — flagged here for the record.
+
+**Final corpus, all sources, verified end-to-end against the real files on disk:**
+
+```
+7 chat sources: UltraChat 100,000 + OASST1 3,446 + Dolly 12,173 + SmolTalk 100,000 +
+                No Robots 17,110 + GSM8K 16,860 + LMSYS 0 (gated) = 249,589 conversations
+extra documents: 48,912 books + 4,498 repos + 222,029 Wikipedia = 275,439
+
+train.txt: 280,330,103 tokens  (224,630 chat + 247,895 extra docs)
+test.txt:   31,367,398 tokens  ( 24,959 chat +  27,544 extra docs)
+total:     311,697,501 tokens
+```

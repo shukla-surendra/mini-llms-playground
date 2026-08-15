@@ -4,7 +4,7 @@ Model size is fully data-driven — pick a named preset or override individual f
 and everything downstream (parameter count, checkpoint location, the model itself)
 follows automatically. Nothing else in the package hardcodes a dimension.
 
-    GPT_PRESET=30m gpt-train          # train a ~30M model instead of the ~10M default
+    GPT_PRESET=10m gpt-train          # train a ~10M model instead of the ~50M default
     GPT_EMBED_SIZE=192 gpt-train      # or override one field on top of a preset
 """
 
@@ -111,7 +111,7 @@ PRESETS = {
     "153m": ModelConfig(context_length=1024, embed_size=768, num_heads=12, num_layers=16),
 }
 
-DEFAULT_PRESET = "10m"
+DEFAULT_PRESET = "50m"
 
 _ENV_OVERRIDES = {
     "context_length": ("GPT_CONTEXT_LENGTH", int),

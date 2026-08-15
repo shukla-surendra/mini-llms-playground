@@ -1,11 +1,14 @@
 """Every tunable knob in one place: model size, training hyperparameters, paths.
 
-Model size is fully data-driven — pick a named preset or override individual fields,
-and everything downstream (parameter count, checkpoint location, the model itself)
-follows automatically. Nothing else in the package hardcodes a dimension.
+Model size is fully data-driven. The ~50M architecture below is this project's own
+default — it lives directly on `ModelConfig`, so `gpt-train` with no env vars set trains
+it without ever consulting `PRESETS`. `PRESETS`/`GPT_PRESET` remain available to
+explicitly switch to another size (e.g. for comparison against the sibling projects),
+and individual fields can be overridden on top of either. Nothing else in the package
+hardcodes a dimension.
 
-    GPT_PRESET=30m gpt-train          # train a ~30M model instead of the ~10M default
-    GPT_EMBED_SIZE=192 gpt-train      # or override one field on top of a preset
+    GPT_PRESET=30m gpt-train          # train a ~30M model instead of the ~50M default
+    GPT_EMBED_SIZE=192 gpt-train      # or override one field on top of the default/preset
 """
 
 from dataclasses import dataclass, replace
@@ -20,12 +23,16 @@ VOCAB_SIZE = 50257
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Architecture. `param_count()` is exact — it mirrors model.py's actual layers."""
+    """Architecture. `param_count()` is exact — it mirrors model.py's actual layers.
 
-    context_length: int = 512
-    embed_size: int = 160
+    Field defaults are this project's own ~50M architecture — the config `gpt-train`
+    uses when no `GPT_PRESET`/`--preset` is given, with no dict lookup involved.
+    """
+
+    context_length: int = 1024
+    embed_size: int = 512
     num_heads: int = 8
-    num_layers: int = 6
+    num_layers: int = 8
     dropout: float = 0.1
     vocab_size: int = VOCAB_SIZE
 
@@ -99,19 +106,18 @@ class TrainConfig:
     demo_prompt: str = "The quick brown fox"
 
 
-# Named sizes. Parameter counts are computed, never hardcoded, so they cannot drift
-# out of sync with the architecture.
+# Named sizes for explicitly switching away from this project's own default (e.g. to
+# compare against the sibling custom-gpt-{10m,30m,153m} projects). "50m" is derived from
+# ModelConfig()'s own field defaults, not re-hardcoded, so the two can never drift apart.
+# Parameter counts are computed, never hardcoded, so they cannot drift out of sync either.
 PRESETS = {
     "tiny": ModelConfig(context_length=256, embed_size=128, num_heads=4, num_layers=4),
     "10m": ModelConfig(context_length=512, embed_size=160, num_heads=8, num_layers=6),
     "30m": ModelConfig(context_length=512, embed_size=384, num_heads=6, num_layers=6),
-    # Matches the sibling custom-gpt-50m project's architecture exactly.
-    "50m": ModelConfig(context_length=1024, embed_size=512, num_heads=8, num_layers=8),
+    "50m": ModelConfig(),  # this project's own default architecture
     # Matches the sibling custom-gpt-153m project's architecture exactly.
     "153m": ModelConfig(context_length=1024, embed_size=768, num_heads=12, num_layers=16),
 }
-
-DEFAULT_PRESET = "50m"
 
 _ENV_OVERRIDES = {
     "context_length": ("GPT_CONTEXT_LENGTH", int),
@@ -123,18 +129,26 @@ _ENV_OVERRIDES = {
 
 
 def resolve_model_config(preset_name=None):
-    """Build the active ModelConfig: a named preset, plus any per-field env overrides.
+    """Build the active ModelConfig: the ~50M default, or an explicit named preset, plus
+    any per-field env overrides.
 
-    Returns (config, label). `label` names the resulting size — the preset name, or a
-    descriptive `custom-...` string when overrides changed it. Checkpoints are stored
-    per-label so switching sizes never silently overwrites another model's weights.
+    With no `preset_name` and no `GPT_PRESET` set, this is `ModelConfig()` — the project's
+    own default architecture, straight off the dataclass, no `PRESETS` lookup involved.
+
+    Returns (config, label). `label` names the resulting size — `"50m"` for the untouched
+    default, the preset name when one is picked, or a descriptive `custom-...` string when
+    overrides changed it. Checkpoints are stored per-label so switching sizes never
+    silently overwrites another model's weights.
     """
-    preset_name = preset_name or os.getenv("GPT_PRESET", DEFAULT_PRESET)
-    if preset_name not in PRESETS:
-        available = ", ".join(PRESETS)
-        raise ValueError(f"Unknown GPT_PRESET {preset_name!r}. Available: {available}")
+    preset_name = preset_name or os.getenv("GPT_PRESET")
+    if preset_name is None:
+        base, label = ModelConfig(), "50m"
+    else:
+        if preset_name not in PRESETS:
+            available = ", ".join(PRESETS)
+            raise ValueError(f"Unknown GPT_PRESET {preset_name!r}. Available: {available}")
+        base, label = PRESETS[preset_name], preset_name
 
-    base = PRESETS[preset_name]
     overrides = {}
     for field_name, (env_var, cast) in _ENV_OVERRIDES.items():
         raw = os.getenv(env_var)
@@ -142,7 +156,7 @@ def resolve_model_config(preset_name=None):
             overrides[field_name] = cast(raw)
 
     if not overrides:
-        return base, preset_name
+        return base, label
 
     cfg = replace(base, **overrides)
     label = (
