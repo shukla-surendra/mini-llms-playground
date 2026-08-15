@@ -4,8 +4,15 @@ Model size is fully data-driven — pick a named preset or override individual f
 and everything downstream (parameter count, checkpoint location, the model itself)
 follows automatically. Nothing else in the package hardcodes a dimension.
 
-    GPT_PRESET=30m gpt-train          # train a ~30M model instead of the ~10M default
+    GPT_PRESET=30m gpt-train          # train a ~30M model instead of the ~153M default
     GPT_EMBED_SIZE=192 gpt-train      # or override one field on top of a preset
+
+`TrainConfig`'s defaults target a **single rented GPU** (see docs/GPU_TRAINING.md),
+not a laptop — unlike the sibling custom-gpt-{10m,50m} projects, whose `batch_size=1`
+defaults exist for MPS. Every training knob also takes an env override so a laptop
+smoke test needs no code edit:
+
+    GPT_BATCH_SIZE=1 GPT_GRAD_ACCUM=8 GPT_STEPS=200 gpt-train   # local sanity run
 """
 
 from dataclasses import dataclass, replace
@@ -20,12 +27,16 @@ VOCAB_SIZE = 50257
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Architecture. `param_count()` is exact — it mirrors model.py's actual layers."""
+    """Architecture. `param_count()` is exact — it mirrors model.py's actual layers.
 
-    context_length: int = 512
-    embed_size: int = 160
-    num_heads: int = 8
-    num_layers: int = 6
+    Field defaults are this project's own ~153M architecture, so `PRESETS["153m"]`
+    can be derived from them rather than restated — the two cannot drift apart.
+    """
+
+    context_length: int = 1024
+    embed_size: int = 768
+    num_heads: int = 12
+    num_layers: int = 16
     dropout: float = 0.1
     vocab_size: int = VOCAB_SIZE
 
@@ -84,17 +95,38 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class TrainConfig:
-    batch_size: int = 1          # keep at 1 for MPS/laptop VRAM; raise on a real GPU
-    grad_accum_steps: int = 32   # effective batch = batch_size * grad_accum_steps
-    lr: float = 2e-4
-    min_lr: float = 2e-5
+    """Training hyperparameters, defaulted for one 24 GB GPU (see docs/GPU_TRAINING.md).
+
+    A **step is one micro-batch** forward/backward, not one optimizer update — so
+    `steps` and `batch_size` together set the token budget:
+
+        tokens = steps * batch_size * context_length
+               = 150_000 * 16 * 1024 = 2.46B
+
+    That is ~16 tokens per parameter against this model's 152.8M, near the
+    Chinchilla-optimal ~20:1 and sized to finish inside ~24 GPU-hours. Changing
+    `batch_size` without changing `steps` silently rescales the whole budget.
+    """
+
+    batch_size: int = 16         # ~10 GB VRAM at 153M/seq1024/bf16; fits 24 GB with room
+    grad_accum_steps: int = 4    # effective batch 64 seqs = 65,536 tokens per update
+    lr: float = 4e-4             # 2e-4 is conservative at this size/batch (GPT-3 125M: 6e-4)
+    min_lr: float = 4e-5
     weight_decay: float = 0.1
     grad_clip_norm: float = 1.0
-    steps: int = 1_000_000
-    eval_interval: int = 50
+    steps: int = 150_000         # 2.46B tokens — see the class docstring
+    # Each eval is eval_batches*2 forward passes at full batch_size, so it is far more
+    # expensive here than in the batch_size=1 sibling projects. 500 keeps it under ~3%
+    # of step time; it is telemetry only and safe to change between resumes.
+    eval_interval: int = 500
     eval_batches: int = 20
-    save_every_steps: int = 200
+    # A checkpoint is ~1.8 GB (fp32 weights + AdamW moments), so saving every 200 steps
+    # would spend more time on I/O than on training. 2000 is ~17 min of wall clock.
+    save_every_steps: int = 2_000
     seed: int = 42
+    # "auto" = bfloat16 on CUDA, fp32 everywhere else. bf16 (not fp16) because it needs
+    # no GradScaler; Ampere/Ada support it, Turing (T4) does not — see docs/GPU_TRAINING.md.
+    precision: str = "auto"
     max_new_tokens: int = 80     # demo completion printed at the end of a run
     demo_prompt: str = "The quick brown fox"
 
@@ -107,8 +139,9 @@ PRESETS = {
     "30m": ModelConfig(context_length=512, embed_size=384, num_heads=6, num_layers=6),
     # Matches the sibling custom-gpt-50m project's architecture exactly.
     "50m": ModelConfig(context_length=1024, embed_size=512, num_heads=8, num_layers=8),
-    # Matches the sibling custom-gpt-153m project's architecture exactly.
-    "153m": ModelConfig(context_length=1024, embed_size=768, num_heads=12, num_layers=16),
+    # This project's own default architecture, straight off ModelConfig's field
+    # defaults — never restated, so it cannot drift out of sync with them.
+    "153m": ModelConfig(),
 }
 
 DEFAULT_PRESET = "153m"
@@ -219,7 +252,35 @@ class Paths:
         return self.log_dir / f"quality_history_{self.label}.jsonl"
 
 
+_TRAIN_ENV_OVERRIDES = {
+    "batch_size": ("GPT_BATCH_SIZE", int),
+    "grad_accum_steps": ("GPT_GRAD_ACCUM", int),
+    "lr": ("GPT_LR", float),
+    "min_lr": ("GPT_MIN_LR", float),
+    "steps": ("GPT_STEPS", int),
+    "eval_interval": ("GPT_EVAL_INTERVAL", int),
+    "eval_batches": ("GPT_EVAL_BATCHES", int),
+    "save_every_steps": ("GPT_SAVE_EVERY", int),
+    "precision": ("GPT_PRECISION", str),
+}
+
+
+def resolve_train_config():
+    """TrainConfig with any `GPT_*` env overrides applied.
+
+    Exists so the same checkout runs on a laptop and on a rented GPU without editing
+    code — the GPU-sized defaults are wrong for a local smoke test, and a smoke test
+    that requires a source edit is one people skip.
+    """
+    overrides = {}
+    for field_name, (env_var, cast) in _TRAIN_ENV_OVERRIDES.items():
+        raw = os.getenv(env_var)
+        if raw is not None:
+            overrides[field_name] = cast(raw)
+    return replace(TrainConfig(), **overrides) if overrides else TrainConfig()
+
+
 def load_settings(preset_name=None):
     """One call for everything an entrypoint needs: (model_cfg, train_cfg, paths, label)."""
     model_cfg, label = resolve_model_config(preset_name)
-    return model_cfg, TrainConfig(), Paths(label=label), label
+    return model_cfg, resolve_train_config(), Paths(label=label), label

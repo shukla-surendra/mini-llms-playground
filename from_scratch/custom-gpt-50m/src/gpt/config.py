@@ -98,7 +98,11 @@ class TrainConfig:
     weight_decay: float = 0.1
     grad_clip_norm: float = 1.0
     steps: int = 1_000_000
-    eval_interval: int = 50
+    # 50 -> 200: on MPS, estimate_loss's 40 forward passes (eval_batches*2) cost ~30ms/step
+    # amortized at eval_interval=50 -- ~20% of total step time on an M4 Pro, measured directly
+    # against an idle GPU. Telemetry-only change: doesn't touch the training path or loss,
+    # just how often it's sampled, so it's safe to change between resumes of the same run.
+    eval_interval: int = 200
     eval_batches: int = 20
     save_every_steps: int = 200
     seed: int = 42

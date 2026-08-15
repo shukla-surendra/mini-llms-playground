@@ -21,11 +21,19 @@ from ..data.sources import DATASETS
 from ..inference import generate_text
 from ..runtime import get_device
 
-# Prompt count per category is weighted by that source's role in the training mix
-# (docs/DATASETS.md): UltraChat/OASST1/LMSYS are the bulk conversational volume, so
-# they get the most coverage; Dolly is small but hand-written across seven distinct
-# task types, so it gets one prompt per documented type instead of a volume-based
-# count; SmolTalk is a compact mixture, so a handful spanning its stated sub-domains.
+# Prompt count per category is weighted by that source's actual role in this project's
+# corpus (see DATASET.md): UltraChat/SmolTalk are the two 100k-conversation bulk sources,
+# so they get the most coverage; No Robots gets one prompt per documented task type (10,
+# the largest single category) since it's the only source with that many distinct
+# task-types documented; Dolly likewise gets one prompt per its 7 documented types; GSM8K
+# gets dedicated coverage because it was added for one specific, previously-measured gap
+# (the model attempting zero real arithmetic) — these prompts are the direct regression
+# check for that fix; Wikipedia/Books/the three practice repos are extra (non-chat)
+# documents, not conversations, so they're tested as closed-QA/domain-knowledge probes —
+# does that knowledge actually surface in a generated answer — rather than dialogue
+# style. LMSYS is excluded entirely: gated, no HF_TOKEN configured, 0 conversations
+# actually in this checkpoint's training corpus (see DATASET.md), so there is nothing to
+# regression-test yet.
 QA_CATEGORIES = [
     ("UltraChat-style (bulk everyday-assistant Q&A)", [
         "What are three simple ways to stay productive while working from home?",
@@ -34,6 +42,8 @@ QA_CATEGORIES = [
         "What's a good beginner recipe for homemade pizza?",
         "How can I improve my public speaking skills?",
         "What are the benefits of regular exercise?",
+        "What's a good way to start meal-prepping for the week?",
+        "How do I set up a simple budget if I've never made one before?",
     ]),
     ("OASST1-style (human-phrased, sometimes messier)", [
         "whats the difference between a virus and bacteria? also which one antibiotics work on",
@@ -61,13 +71,51 @@ QA_CATEGORIES = [
         "are the three pillars most doctors recommend for maintaining long-term health.",
         "What's something interesting you'd want to learn more about?",
     ]),
-    ("LMSYS-style (casual, unfiltered real-user phrasing)", [
-        "yo whats a good movie to watch tonight im bored",
-        "fix this code its not working: def add(a,b) return a+b",
-        "can you write me a poem about cats idk make it funny",
-        "whats 15% tip on a $42 bill",
-        "explain quantum computing but like im dumb",
-        "give me a random fun fact",
+    ("No Robots-style (one prompt per documented task type, entirely human-written)", [
+        "Write a two-line birthday message for a coworker turning 30.",                       # generation
+        "Why do cats purr?",                                                                  # open QA
+        "Suggest four icebreaker questions for a team meeting.",                              # brainstorm
+        "I just finished a really long week at work, what's a good way to unwind tonight?",   # chat
+        "Rewrite this in a friendlier tone: \"Your report is late again.\"",                  # rewrite
+        "Summarize in one sentence: Photosynthesis is the process plants use to convert "
+        "sunlight, water, and carbon dioxide into glucose and oxygen.",                       # summarize
+        "Write a Python function that returns the factorial of a number.",                    # coding
+        "Classify each as a mammal or a bird: dolphin, eagle, bat, penguin.",                 # classify
+        "What year did the first man land on the moon?",                                      # closed QA
+        "Extract the city and country from this sentence: \"The conference will be held "
+        "in Lisbon, Portugal next spring.\"",                                                 # extract
+    ]),
+    ("GSM8K-style (grade-school math word problems — the arithmetic-gap fix)", [
+        "A bakery sold 48 cupcakes in the morning and 27 in the afternoon. "
+        "How many cupcakes did they sell in total?",
+        "Maria has $85. She spends $32 on groceries and $18 on a book. "
+        "How much money does she have left?",
+        "A school bus holds 36 students. If 8 buses are full, how many students are being transported?",
+        "Tom read 24 pages of a book each day for 5 days. How many pages did he read in total?",
+        "A pizza is cut into 8 equal slices. If 3 people each eat 2 slices, how many slices are left?",
+        "A store gives a 20% discount on a $50 jacket. What is the final price after the discount?",
+    ]),
+    ("Wikipedia-style (Simple English Wikipedia — world-knowledge probe)", [
+        "What is the capital of Japan?",
+        "Which planet in our solar system is known as the Red Planet?",
+        "Who wrote the play Romeo and Juliet?",
+        "What is the chemical symbol for gold?",
+        "What is the largest ocean on Earth?",
+        "In what year did World War II end?",
+    ]),
+    ("Books-style (one prompt per documented topic bucket)", [
+        "What's one effective technique for managing anxiety before a big presentation?",      # psychology/self-help
+        "What's a common mistake English learners make with the present perfect tense?",       # language learning
+        "What's the difference between gross profit and net profit?",                          # business/career/finance
+        "What is overfitting in machine learning, and how can you prevent it?",                 # programming/tech/AI
+        "Write the opening line of a short mystery story set in a lighthouse.",                 # fiction
+        "Why do vaccines sometimes need booster doses?",                                        # science/medicine
+    ]),
+    ("Repo-domain-style (source/docs from the three practice repos in the corpus)", [
+        "What's the difference between a phrasal verb and an idiom?",          # eng-skills
+        "What does a kernel do in an operating system?",                       # OxideOS
+        "What's the difference between a Kubernetes Deployment and a StatefulSet?",  # platform-lab
+        "What is retrieval-augmented generation (RAG) used for?",              # platform-lab (genai_lab)
     ]),
     ("Format-following (does it respect the role boundary?)", [
         "What's your name?",
@@ -77,13 +125,17 @@ QA_CATEGORIES = [
 
 # Maps each category above to the dataset registry entry it's modeled on, so a
 # category can be skipped automatically if that source wasn't actually part of the
-# corpus this checkpoint was trained on (e.g. gated LMSYS skipped by `make data-public`).
+# corpus this checkpoint was trained on. Only chat sources are mapped here — Wikipedia,
+# Books, and the three practice repos are extra (non-chat) documents merged in via
+# `gpt-data --extra-jsonl`, not registry entries with a `data/raw/<slug>` folder, so
+# they're intentionally left unmapped (always run) rather than gated the same way.
 _CATEGORY_SOURCE_HF_ID = {
     "UltraChat-style (bulk everyday-assistant Q&A)": "HuggingFaceH4/ultrachat_200k",
     "OASST1-style (human-phrased, sometimes messier)": "OpenAssistant/oasst1",
     "Dolly-style (one prompt per documented task type)": "zidankhan/databricks-dolly-15k",
     "SmolTalk-style (dialogue / reasoning / rewriting / summarization)": "HuggingFaceTB/smoltalk",
-    "LMSYS-style (casual, unfiltered real-user phrasing)": "lmsys/lmsys-chat-1m",
+    "No Robots-style (one prompt per documented task type, entirely human-written)": "HuggingFaceH4/no_robots",
+    "GSM8K-style (grade-school math word problems — the arithmetic-gap fix)": "openai/gsm8k",
 }
 
 

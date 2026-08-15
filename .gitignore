@@ -36,7 +36,21 @@ data/test_prompts.txt
 
 # Runtime outputs
 *.log
-data
+# Corpus directories, anchored to where projects actually keep them.
+#
+# This was a bare `data` line, which matches a directory of that name at ANY depth —
+# so it silently excluded every project's `src/gpt/data/` SOURCE package too. The
+# result: none of the from_scratch projects had their data package in git at all, and
+# a fresh clone produced a tree where `trainer.py`'s `from ..data import ...` fails.
+# Re-including files under an excluded directory is not possible in git (it never
+# descends into it), so the pattern has to be anchored rather than negated.
+# No trailing slash: these are a real directory in some projects and a symlink to a
+# shared corpus in others, and a trailing slash would only match the directory form.
+from_scratch/*/data
+fine_tuning/*/data
+base_models/*/data
+# Token files built by `gpt-tokenize`, wherever they land.
+*.bin
 logs
 logs/train_eval_history.csv
 # matches at any depth, so this covers every fine-tuning project's outputs/ dir

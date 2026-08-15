@@ -1,4 +1,4 @@
-.PHONY: help setup config presets data data-public audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets data data-public tokenize tokenize-force audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
 
@@ -24,6 +24,7 @@ help:
 	@echo ""
 	@echo "  make data          # download all datasets + build the corpus (needs HF_TOKEN for LMSYS)"
 	@echo "  make data-public   # same, but skip the gated LMSYS dataset (no token needed)"
+	@echo "  make tokenize      # build data/*.bin token files (run once per corpus change)"
 	@echo "  make audit         # corpus quality gate, run before a long training run"
 	@echo ""
 	@echo "  make train         # train in the foreground (auto-resumes from the latest checkpoint)"
@@ -67,14 +68,22 @@ data: setup
 data-public: setup
 	uv run gpt-data --no-gated
 
+# Build data/*.bin (flat uint16 token files) once, so training never re-tokenizes
+# the corpus on a GPU billed by the hour. Skips files whose .bin is already current.
+tokenize: setup
+	uv run gpt-tokenize
+
+tokenize-force: setup
+	uv run gpt-tokenize --force
+
 audit: setup
 	uv run gpt-audit
 
-train: setup
+train: setup tokenize
 	$(guard_not_running)
 	uv run gpt-train
 
-train-fresh: setup
+train-fresh: setup tokenize
 	$(guard_not_running)
 	uv run gpt-train --no-resume
 

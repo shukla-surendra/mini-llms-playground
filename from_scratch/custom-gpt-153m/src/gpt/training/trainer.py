@@ -19,9 +19,8 @@ from ..checkpoint import atomic_save, is_compatible, make_payload, remap_attn_im
 from ..config import TOKENIZER_NAME
 from ..data import (
     effective_context_length,
-    encode_raw,
     get_batch,
-    load_text,
+    load_token_array,
     next_token_loss,
 )
 from ..inference.generate import generate_text
@@ -78,15 +77,50 @@ def append_eval_history(path, row):
         writer.writerow(row)
 
 
+def resolve_amp(precision, device):
+    """Return (device_type, dtype_or_None) for `torch.autocast`.
+
+    "auto" means bfloat16 on CUDA and full fp32 everywhere else. bf16 rather than fp16
+    because it has fp32's exponent range, so training needs no GradScaler and cannot
+    silently underflow gradients — but it requires Ampere or newer (an L4 or A10G has
+    it; a T4 does not). MPS/CPU stay fp32: MPS autocast is not dependable, and without
+    tensor cores there is nothing to win.
+
+    Returning dtype=None means "no autocast", which callers pass straight through as
+    `enabled=False` so there is only one code path.
+    """
+    # Normalise first: `device` may be "cuda:0", but autocast wants a bare device type.
+    device_type = "cuda" if str(device).startswith("cuda") else str(device)
+    if precision == "fp32":
+        return device_type, None
+    if precision in ("bf16", "bfloat16"):
+        return device_type, torch.bfloat16
+    if precision in ("fp16", "float16"):
+        return device_type, torch.float16
+    if precision != "auto":
+        raise ValueError(
+            f"Unknown precision {precision!r}. Use auto, bf16, fp16 or fp32."
+        )
+    if device_type == "cuda" and torch.cuda.is_bf16_supported():
+        return device_type, torch.bfloat16
+    return device_type, None
+
+
 @torch.no_grad()
-def estimate_loss(model, train_tokens, test_tokens, ctx_len, vocab_size, train_cfg, device):
+def estimate_loss(model, train_tokens, test_tokens, ctx_len, vocab_size, train_cfg,
+                  device, amp=None):
     model.eval()
+    device_type, amp_dtype = amp if amp else resolve_amp(train_cfg.precision, device)
     out = {}
     for name, tokens in (("train", train_tokens), ("test", test_tokens)):
         losses = []
         for _ in range(train_cfg.eval_batches):
             xb, yb = get_batch(tokens, ctx_len, train_cfg.batch_size, device)
-            losses.append(next_token_loss(model(xb), yb, vocab_size).item())
+            with torch.autocast(device_type=device_type,
+                                dtype=amp_dtype or torch.float32,
+                                enabled=amp_dtype is not None):
+                loss = next_token_loss(model(xb), yb, vocab_size)
+            losses.append(loss.item())
         out[name] = sum(losses) / len(losses)
     model.train()
     return out
@@ -103,8 +137,11 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
             f"declares vocab_size={model_cfg.vocab_size}. Update config.VOCAB_SIZE."
         )
 
-    train_tokens = encode_raw(tokenizer, load_text(paths.train_data), device)
-    test_tokens = encode_raw(tokenizer, load_text(paths.test_data), device)
+    # Disk-backed uint16 memmaps, built once by `gpt-tokenize` (and built on demand
+    # here if missing/stale). Never materialises the corpus in RAM or VRAM — see
+    # data/dataset.py's module docstring for why that matters at this scale.
+    train_tokens = load_token_array(paths.train_data, tokenizer)
+    test_tokens = load_token_array(paths.test_data, tokenizer)
     if len(train_tokens) < 2 or len(test_tokens) < 2:
         raise ValueError("Train/test corpora must each contain at least 2 tokens.")
 
@@ -121,8 +158,23 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
         model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
     )
 
+    amp_device_type, amp_dtype = resolve_amp(train_cfg.precision, device)
+
+    tokens_per_step = train_cfg.batch_size * ctx_len
     print(f"Model: {label}  |  {model.param_count():,} parameters  |  device={device}  |  attn_impl={attn_impl}")
     print(f"Train tokens: {len(train_tokens):,}  Test tokens: {len(test_tokens):,}")
+    print(
+        f"Precision: {amp_dtype if amp_dtype else 'fp32'}  |  "
+        f"batch {train_cfg.batch_size} x accum {train_cfg.grad_accum_steps} = "
+        f"{train_cfg.batch_size * train_cfg.grad_accum_steps} seqs/update"
+    )
+    # The token budget is implied by steps*batch_size*ctx_len, so print it rather than
+    # let a changed batch_size silently rescale the run (see TrainConfig's docstring).
+    budget = train_cfg.steps * tokens_per_step
+    print(
+        f"Budget: {train_cfg.steps:,} steps x {tokens_per_step:,} tok = {budget / 1e9:.2f}B tokens "
+        f"({budget / model.param_count():.1f} tok/param, {budget / len(train_tokens):.2f} epochs)"
+    )
     print(f"Checkpoints: {paths.checkpoint_dir}/")
 
     state = {
@@ -148,6 +200,8 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
         label=label,
         device=device,
         state=state,
+        amp_device_type=amp_device_type,
+        amp_dtype=amp_dtype,
     )
 
 
@@ -202,7 +256,8 @@ def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device):
 
 
 def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
-              model_cfg, train_cfg, paths, label, device, state):
+              model_cfg, train_cfg, paths, label, device, state,
+              amp_device_type=None, amp_dtype=None):
     run_start = time.time()
 
     def elapsed():
@@ -259,6 +314,7 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 losses = estimate_loss(
                     model, train_tokens, test_tokens, ctx_len,
                     model_cfg.vocab_size, train_cfg, device,
+                    amp=(amp_device_type, amp_dtype),
                 )
                 improved = losses["test"] < state["best_test_loss"]
                 if improved:
@@ -287,7 +343,13 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 }
 
             xb, yb = get_batch(train_tokens, ctx_len, train_cfg.batch_size, device)
-            loss = next_token_loss(model(xb), yb, model_cfg.vocab_size)
+            with torch.autocast(device_type=amp_device_type,
+                                dtype=amp_dtype or torch.float32,
+                                enabled=amp_dtype is not None):
+                loss = next_token_loss(model(xb), yb, model_cfg.vocab_size)
+            # No GradScaler: bf16 keeps fp32's exponent range, so gradients cannot
+            # underflow the way fp16's would. Weights/grads stay fp32 regardless —
+            # autocast only changes the dtype of the ops inside the block.
             (loss / train_cfg.grad_accum_steps).backward()
 
             is_accum_boundary = (step - start_step + 1) % train_cfg.grad_accum_steps == 0
