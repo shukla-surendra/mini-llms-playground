@@ -5,3 +5,5 @@ __pycache__/
 .git/
 .vscode/
 logs/
+infra/
+.terraform/

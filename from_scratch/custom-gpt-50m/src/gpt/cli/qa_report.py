@@ -1,17 +1,31 @@
-"""`gpt-qa-report` — run a curated Q&A prompt set through the current checkpoint and
-render the results as a self-contained HTML report, grouped by which training-corpus
-source each prompt's style is drawn from (see docs/DATASETS.md).
+"""`gpt-qa-report` — run the curated prompt set through a checkpoint and render HTML.
 
-This is a qualitative companion to `gpt-eval`'s structural heuristic score (non-empty,
-non-repetitive, no role leakage) — it doesn't score correctness, it gives you the actual
-generated answers to read, the way docs/llm-engineering/15_evaluating_a_model_while_
-training.md's Signal #4 ("does the output actually sound better") is meant to be judged.
+The qualitative companion to `gpt-eval`'s structural heuristic score: it does not grade
+correctness, it gives you the actual generated answers to read — the way
+`docs/llm-engineering/15_evaluating_a_model_while_training.md`'s Signal #4 ("does the
+output actually sound better") is meant to be judged.
+
+Two halves:
+
+* **Prompt set** — ~130 questions across *corpus-mirroring* categories (regression
+  checks against each training source) and *capability probes* (reasoning, coding,
+  agentic planning, practical life, safety, self-knowledge). See `qa_prompts.py` for
+  why both exist, and why failure on the probes is expected rather than a bug.
+* **Parameter sweep** — a few prompts re-asked under greedy/conservative/default/
+  creative decoding, so you can separate what the *model* believes from what the
+  *sampler* happened to roll.
+
+    gpt-qa-report --checkpoint latest      # current training state, not a stale best.pt
+    gpt-qa-report --cpu                    # leave the GPU to a running trainer
+    gpt-qa-report --per-category-limit 2   # quick look
+    gpt-qa-report --no-sweep               # skip the parameter sweep
 """
 
 import argparse
 import html
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import torch
 
@@ -20,129 +34,30 @@ from ..config import load_settings
 from ..data.sources import DATASETS
 from ..inference import generate_text
 from ..runtime import get_device
+from .qa_prompts import (PROBE_CATEGORIES, QA_CATEGORIES, SWEEP_PROMPTS,
+                         SWEEP_SETTINGS)
 
-# Prompt count per category is weighted by that source's actual role in this project's
-# corpus (see DATASET.md): UltraChat/SmolTalk are the two 100k-conversation bulk sources,
-# so they get the most coverage; No Robots gets one prompt per documented task type (10,
-# the largest single category) since it's the only source with that many distinct
-# task-types documented; Dolly likewise gets one prompt per its 7 documented types; GSM8K
-# gets dedicated coverage because it was added for one specific, previously-measured gap
-# (the model attempting zero real arithmetic) — these prompts are the direct regression
-# check for that fix; Wikipedia/Books/the three practice repos are extra (non-chat)
-# documents, not conversations, so they're tested as closed-QA/domain-knowledge probes —
-# does that knowledge actually surface in a generated answer — rather than dialogue
-# style. LMSYS is excluded entirely: gated, no HF_TOKEN configured, 0 conversations
-# actually in this checkpoint's training corpus (see DATASET.md), so there is nothing to
-# regression-test yet.
-QA_CATEGORIES = [
-    ("UltraChat-style (bulk everyday-assistant Q&A)", [
-        "What are three simple ways to stay productive while working from home?",
-        "Can you explain what a black hole is in simple terms?",
-        "I'm planning a trip to Japan. What should I pack?",
-        "What's a good beginner recipe for homemade pizza?",
-        "How can I improve my public speaking skills?",
-        "What are the benefits of regular exercise?",
-        "What's a good way to start meal-prepping for the week?",
-        "How do I set up a simple budget if I've never made one before?",
-    ]),
-    ("OASST1-style (human-phrased, sometimes messier)", [
-        "whats the difference between a virus and bacteria? also which one antibiotics work on",
-        "Can you help me write a short apology message to a friend I forgot to call back?",
-        "why is the sky blue? explain like im five",
-        "whats a good way to learn a new language fast, ive tried apps before but they didnt stick",
-        "can u give me tips for a job interview tmrw im nervous",
-    ]),
-    ("Dolly-style (one prompt per documented task type)", [
-        "Brainstorm five names for a small coffee shop.",                                    # brainstorming
-        "Classify the following as a fruit or a vegetable: tomato, carrot, apple, spinach.",  # classification
-        "What is the capital of France?",                                                     # closed QA
-        "Why do leaves change color in autumn?",                                              # open QA
-        "Write a short two-sentence story about a lost dog finding its way home.",            # generation
-        "Summarize in one sentence: The Great Wall of China is a series of fortifications "
-        "built across the historical northern borders of China to protect against invasions.",  # summarization
-        "Extract the person's name and age from this sentence: \"John Smith, aged 34, "
-        "joined the company last year.\"",                                                    # extraction
-    ]),
-    ("SmolTalk-style (dialogue / reasoning / rewriting / summarization)", [
-        "What's your favorite way to spend a weekend?",
-        "If a train leaves at 3pm and travels for 2 hours 45 minutes, what time does it arrive?",
-        "Rewrite this sentence to sound more formal: \"hey can u send me that file asap\"",
-        "Summarize this in one sentence: Regular sleep, a balanced diet, and daily exercise "
-        "are the three pillars most doctors recommend for maintaining long-term health.",
-        "What's something interesting you'd want to learn more about?",
-    ]),
-    ("No Robots-style (one prompt per documented task type, entirely human-written)", [
-        "Write a two-line birthday message for a coworker turning 30.",                       # generation
-        "Why do cats purr?",                                                                  # open QA
-        "Suggest four icebreaker questions for a team meeting.",                              # brainstorm
-        "I just finished a really long week at work, what's a good way to unwind tonight?",   # chat
-        "Rewrite this in a friendlier tone: \"Your report is late again.\"",                  # rewrite
-        "Summarize in one sentence: Photosynthesis is the process plants use to convert "
-        "sunlight, water, and carbon dioxide into glucose and oxygen.",                       # summarize
-        "Write a Python function that returns the factorial of a number.",                    # coding
-        "Classify each as a mammal or a bird: dolphin, eagle, bat, penguin.",                 # classify
-        "What year did the first man land on the moon?",                                      # closed QA
-        "Extract the city and country from this sentence: \"The conference will be held "
-        "in Lisbon, Portugal next spring.\"",                                                 # extract
-    ]),
-    ("GSM8K-style (grade-school math word problems — the arithmetic-gap fix)", [
-        "A bakery sold 48 cupcakes in the morning and 27 in the afternoon. "
-        "How many cupcakes did they sell in total?",
-        "Maria has $85. She spends $32 on groceries and $18 on a book. "
-        "How much money does she have left?",
-        "A school bus holds 36 students. If 8 buses are full, how many students are being transported?",
-        "Tom read 24 pages of a book each day for 5 days. How many pages did he read in total?",
-        "A pizza is cut into 8 equal slices. If 3 people each eat 2 slices, how many slices are left?",
-        "A store gives a 20% discount on a $50 jacket. What is the final price after the discount?",
-    ]),
-    ("Wikipedia-style (Simple English Wikipedia — world-knowledge probe)", [
-        "What is the capital of Japan?",
-        "Which planet in our solar system is known as the Red Planet?",
-        "Who wrote the play Romeo and Juliet?",
-        "What is the chemical symbol for gold?",
-        "What is the largest ocean on Earth?",
-        "In what year did World War II end?",
-    ]),
-    ("Books-style (one prompt per documented topic bucket)", [
-        "What's one effective technique for managing anxiety before a big presentation?",      # psychology/self-help
-        "What's a common mistake English learners make with the present perfect tense?",       # language learning
-        "What's the difference between gross profit and net profit?",                          # business/career/finance
-        "What is overfitting in machine learning, and how can you prevent it?",                 # programming/tech/AI
-        "Write the opening line of a short mystery story set in a lighthouse.",                 # fiction
-        "Why do vaccines sometimes need booster doses?",                                        # science/medicine
-    ]),
-    ("Repo-domain-style (source/docs from the three practice repos in the corpus)", [
-        "What's the difference between a phrasal verb and an idiom?",          # eng-skills
-        "What does a kernel do in an operating system?",                       # OxideOS
-        "What's the difference between a Kubernetes Deployment and a StatefulSet?",  # platform-lab
-        "What is retrieval-augmented generation (RAG) used for?",              # platform-lab (genai_lab)
-    ]),
-    ("Format-following (does it respect the role boundary?)", [
-        "What's your name?",
-        "Can you help me?",
-    ]),
-]
+REPORT_TZ = ZoneInfo("Asia/Kolkata")
 
-# Maps each category above to the dataset registry entry it's modeled on, so a
-# category can be skipped automatically if that source wasn't actually part of the
-# corpus this checkpoint was trained on. Only chat sources are mapped here — Wikipedia,
-# Books, and the three practice repos are extra (non-chat) documents merged in via
-# `gpt-data --extra-jsonl`, not registry entries with a `data/raw/<slug>` folder, so
-# they're intentionally left unmapped (always run) rather than gated the same way.
+# Categories mirroring a registered chat source are skipped when that source is absent
+# from data/raw/, so a report never claims to test a dataset this checkpoint never saw
+# (relevant for the gated LMSYS set). Capability probes and extra-document categories
+# are intentionally unmapped — they always run.
 _CATEGORY_SOURCE_HF_ID = {
     "UltraChat-style (bulk everyday-assistant Q&A)": "HuggingFaceH4/ultrachat_200k",
     "OASST1-style (human-phrased, sometimes messier)": "OpenAssistant/oasst1",
     "Dolly-style (one prompt per documented task type)": "zidankhan/databricks-dolly-15k",
     "SmolTalk-style (dialogue / reasoning / rewriting / summarization)": "HuggingFaceTB/smoltalk",
-    "No Robots-style (one prompt per documented task type, entirely human-written)": "HuggingFaceH4/no_robots",
-    "GSM8K-style (grade-school math word problems — the arithmetic-gap fix)": "openai/gsm8k",
+    "No Robots-style (one prompt per documented task type, entirely human-written)":
+        "HuggingFaceH4/no_robots",
+    "GSM8K-style (grade-school math — the arithmetic-gap regression check)": "openai/gsm8k",
 }
+
+def _is_probe(category):
+    return category in PROBE_CATEGORIES
 
 
 def _active_categories(data_dir):
-    """QA_CATEGORIES filtered to sources actually present in data/raw/ — so a report
-    never claims to test a dataset flavor that wasn't in this checkpoint's training
-    corpus (relevant for the gated LMSYS-Chat-1M set, skipped by `make data-public`)."""
     sources_by_id = {ds.hf_id: ds for ds in DATASETS}
     active, skipped = [], []
     for category, questions in QA_CATEGORIES:
@@ -150,178 +65,251 @@ def _active_categories(data_dir):
         if hf_id is None:
             active.append((category, questions))
             continue
-        raw_dir = data_dir / "raw" / sources_by_id[hf_id].slug
-        if raw_dir.exists():
+        if (data_dir / "raw" / sources_by_id[hf_id].slug).exists():
             active.append((category, questions))
         else:
             skipped.append(category)
     return active, skipped
 
 
-def _build_html(*, label, param_count, checkpoint_path, step, configured_steps,
-                 best_test_loss, generation_settings, results, generated_at, skipped):
-    progress_pct = (100.0 * step / configured_steps) if configured_steps else None
-    progress_str = f"{progress_pct:.1f}%" if progress_pct is not None else "n/a"
-    best_loss_str = f"{best_test_loss:.4f}" if best_test_loss is not None else "n/a"
+CSS = """
+:root {
+  --bg:#f6f7f9; --card:#fff; --ink:#12151a; --muted:#5a6472; --line:#e3e7ec;
+  --q-bg:#eef4ff; --q-ink:#12305c; --q-edge:#3b6fd4;
+  --a-bg:#fbfbfc; --a-ink:#1c2128; --a-edge:#b9c0ca;
+  --probe:#a2540d; --probe-bg:#fff6e8; --mirror:#0f6b4f; --mirror-bg:#e9f7f1;
+  --accent:#3b6fd4;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0f1216; --card:#161a20; --ink:#e6e9ee; --muted:#98a2b3; --line:#262c35;
+    --q-bg:#152441; --q-ink:#cfe0ff; --q-edge:#5d8ae6;
+    --a-bg:#12161c; --a-ink:#d6dbe3; --a-edge:#39414d;
+    --probe:#f0b366; --probe-bg:#2a1f10; --mirror:#7fd8b6; --mirror-bg:#0f2620;
+    --accent:#5d8ae6;
+  }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink);
+  font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif; }
+.wrap { max-width:920px; margin:0 auto; padding:2rem 1.25rem 5rem; }
+h1 { font-size:1.5rem; margin:0 0 .35rem; letter-spacing:-.01em; }
+.clock { font-size:1.02rem; font-weight:650; color:var(--accent); margin:.1rem 0 1.2rem; }
+.meta { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:1rem 1.15rem; margin-bottom:1.5rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:.6rem 1.4rem; }
+.kv { font-size:.88rem; } .kv b { display:block; color:var(--muted); font-weight:600;
+  text-transform:uppercase; letter-spacing:.045em; font-size:.68rem; margin-bottom:.14rem; }
+code, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.86em; }
+.chips { margin-top:.9rem; padding-top:.85rem; border-top:1px solid var(--line); }
+.chip { display:inline-block; background:var(--bg); border:1px solid var(--line);
+  border-radius:999px; padding:.16rem .62rem; margin:.16rem .3rem .16rem 0; font-size:.78rem; }
+.toc { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:.9rem 1.15rem; margin-bottom:2.2rem; font-size:.88rem; }
+.toc a { color:var(--accent); text-decoration:none; display:inline-block; margin:.18rem .7rem .18rem 0; }
+.toc a:hover { text-decoration:underline; }
+section { margin:0 0 2.8rem; }
+h2 { font-size:1.06rem; margin:0 0 .3rem; display:flex; align-items:center;
+  gap:.6rem; flex-wrap:wrap; scroll-margin-top:1rem; }
+.tag-kind { font-size:.66rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+  padding:.17rem .5rem; border-radius:5px; }
+.kind-probe { color:var(--probe); background:var(--probe-bg); }
+.kind-mirror { color:var(--mirror); background:var(--mirror-bg); }
+.note { font-size:.83rem; color:var(--muted); margin:.1rem 0 1.1rem; }
+.qa { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  margin:0 0 1.15rem; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.045); }
+.q { background:var(--q-bg); color:var(--q-ink); border-left:4px solid var(--q-edge);
+  padding:.75rem 1rem; font-weight:640; white-space:pre-wrap; }
+.a { background:var(--a-bg); color:var(--a-ink); border-left:4px solid var(--a-edge);
+  padding:.85rem 1rem; white-space:pre-wrap; }
+.lbl { display:inline-block; min-width:1.4rem; font-weight:800; font-size:.74rem;
+  opacity:.6; letter-spacing:.06em; }
+.empty { color:var(--muted); font-style:italic; }
+.sweep { background:var(--card); border:1px solid var(--line); border-radius:12px;
+  margin:0 0 1.4rem; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.045); }
+.sweep .q { border-left-color:var(--accent); }
+.setting { border-top:1px solid var(--line); padding:.75rem 1rem; }
+.setting .name { font-size:.72rem; font-weight:750; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--muted); margin-bottom:.32rem; }
+.setting .out { white-space:pre-wrap; }
+footer { color:var(--muted); font-size:.82rem; border-top:1px solid var(--line);
+  padding-top:1rem; margin-top:2rem; }
+"""
 
-    settings_str = " &nbsp;·&nbsp; ".join(
-        f"{k}={v}" for k, v in generation_settings.items()
-    )
-    skipped_html = (
-        f"<br>skipped (source not in this checkpoint's training corpus): "
-        f"<code>{html.escape(', '.join(skipped))}</code>"
-        if skipped else ""
-    )
+
+def _slug(text):
+    return "".join(c if c.isalnum() else "-" for c in text.lower())[:48].strip("-")
+
+
+def _qa_block(question, answer):
+    body = html.escape(answer) if answer.strip() else '<span class="empty">(empty)</span>'
+    return (f'<div class="qa"><div class="q"><span class="lbl">Q</span>{html.escape(question)}</div>'
+            f'<div class="a"><span class="lbl">A</span>{body}</div></div>')
+
+
+def _build_html(*, label, param_count, checkpoint_path, step, configured_steps,
+                best_test_loss, settings, results, sweep, skipped, generated_utc):
+    ist = generated_utc.astimezone(REPORT_TZ)
+    pct = f"{100.0 * step / configured_steps:.1f}%" if configured_steps else "n/a"
+    loss = f"{best_test_loss:.4f}" if best_test_loss is not None else "n/a"
+
+    toc = " ".join(f'<a href="#{_slug(c)}">{html.escape(c.split(" (")[0])}</a>'
+                   for c, _ in results)
+    chips = "".join(f'<span class="chip">{html.escape(k)} = <code>{html.escape(str(v))}</code></span>'
+                    for k, v in settings.items())
 
     sections = []
     for category, items in results:
-        rows = []
-        for question, answer in items:
-            rows.append(f"""
-      <div class="qa">
-        <div class="q"><span class="tag">Q</span>{html.escape(question)}</div>
-        <div class="a"><span class="tag tag-a">A</span>{html.escape(answer) or '<em>(empty)</em>'}</div>
-      </div>""")
-        sections.append(f"""
-    <section>
-      <h2>{html.escape(category)}</h2>
-      {"".join(rows)}
-    </section>""")
+        probe = _is_probe(category)
+        kind = ('<span class="tag-kind kind-probe">capability probe</span>' if probe
+                else '<span class="tag-kind kind-mirror">corpus regression</span>')
+        note = ("Asks for behaviour the training corpus does <em>not</em> contain — wrong "
+                "answers here are the expected gap, not a regression."
+                if probe else
+                "Mirrors a training source; a change here means the corpus or the model moved.")
+        rows = "".join(_qa_block(q, a) for q, a in items)
+        sections.append(
+            f'<section id="{_slug(category)}"><h2>{html.escape(category)} {kind}</h2>'
+            f'<p class="note">{note} &middot; {len(items)} prompts</p>{rows}</section>')
+
+    sweep_html = ""
+    if sweep:
+        blocks = []
+        for question, variants in sweep:
+            outs = "".join(
+                f'<div class="setting"><div class="name">{html.escape(name)}</div>'
+                f'<div class="out">{html.escape(out) if out.strip() else "(empty)"}</div></div>'
+                for name, out in variants)
+            blocks.append(f'<div class="sweep"><div class="q"><span class="lbl">Q</span>'
+                          f'{html.escape(question)}</div>{outs}</div>')
+        sweep_html = (
+            '<section id="parameter-sweep"><h2>Parameter sweep '
+            '<span class="tag-kind kind-mirror">same prompt, different decoding</span></h2>'
+            '<p class="note">The weights are identical in every row below — only the sampler '
+            'changes, from the same seed. Differences here are the decoder, not the model. '
+            'Greedy is deterministic, so it shows what the model most believes rather than '
+            'what it happened to roll.</p>' + "".join(blocks) + '</section>')
+
+    skipped_html = (f'<div class="kv"><b>skipped</b><code>{html.escape(", ".join(skipped))}</code></div>'
+                    if skipped else "")
 
     return f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>custom-gpt-50m QA report — {html.escape(label)} step {step}</title>
-<style>
-  body {{ font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif;
-          max-width: 860px; margin: 2rem auto; padding: 0 1.5rem; color: #1a1a1a; }}
-  h1 {{ font-size: 1.4rem; margin-bottom: 0.25rem; }}
-  .meta {{ color: #555; font-size: 0.85rem; line-height: 1.6; margin-bottom: 2rem; }}
-  .meta code {{ background: #f2f2f2; padding: 0.1rem 0.35rem; border-radius: 3px; }}
-  section {{ margin-bottom: 2rem; }}
-  h2 {{ font-size: 1.05rem; border-bottom: 1px solid #ddd; padding-bottom: 0.4rem; }}
-  .qa {{ margin: 1rem 0; padding: 0.75rem 1rem; background: #fafafa;
-         border-left: 3px solid #ccc; border-radius: 4px; }}
-  .q {{ font-weight: 600; margin-bottom: 0.4rem; }}
-  .a {{ white-space: pre-wrap; color: #222; }}
-  .tag {{ display: inline-block; font-size: 0.7rem; font-weight: 700; color: #fff;
-          background: #666; border-radius: 3px; padding: 0.05rem 0.4rem;
-          margin-right: 0.5rem; vertical-align: 1px; }}
-  .tag-a {{ background: #2b6cb0; }}
-</style>
-</head>
-<body>
-  <h1>custom-gpt-50m — QA performance report</h1>
-  <div class="meta">
-    model label: <code>{html.escape(label)}</code> &nbsp;·&nbsp;
-    parameters: <code>{param_count:,}</code><br>
-    checkpoint: <code>{html.escape(str(checkpoint_path))}</code>
-    (step <code>{step}</code> / <code>{configured_steps:,}</code> configured &mdash; {progress_str}
-    of the training budget) &nbsp;·&nbsp; best_test_loss: <code>{best_loss_str}</code><br>
-    generation: {settings_str}<br>
-    generated: {html.escape(generated_at)}{skipped_html}
-  </div>
-  {"".join(sections)}
-</body>
-</html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html.escape(label)} QA report — step {step}</title>
+<style>{CSS}</style></head><body><div class="wrap">
+<h1>{html.escape(label)} — QA report</h1>
+<div class="clock">{ist:%A, %d %B %Y} &middot; {ist:%I:%M %p} IST</div>
+<div class="meta"><div class="grid">
+  <div class="kv"><b>checkpoint</b><code>{html.escape(Path(checkpoint_path).name)}</code></div>
+  <div class="kv"><b>step</b>{step:,} / {configured_steps:,} ({pct})</div>
+  <div class="kv"><b>parameters</b>{param_count:,}</div>
+  <div class="kv"><b>best test loss</b>{loss}</div>
+  <div class="kv"><b>prompts</b>{sum(len(i) for _, i in results):,}</div>
+  <div class="kv"><b>generated (UTC)</b>{generated_utc:%Y-%m-%d %H:%M}</div>
+  {skipped_html}
+</div><div class="chips">{chips}</div></div>
+<div class="toc"><b>Jump to:</b><br>{toc}
+{'<a href="#parameter-sweep">Parameter sweep</a>' if sweep else ''}</div>
+{"".join(sections)}{sweep_html}
+<footer>Generated by <code>gpt-qa-report</code>. Answers are raw model output — this
+report does not grade correctness, it shows what the model actually says.</footer>
+</div></body></html>
 """
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run a curated Q&A prompt set and render an HTML report."
-    )
-    parser.add_argument("--preset", default=None, help="Model size preset to load")
-    parser.add_argument("--max-new-tokens", type=int, default=200,
-                         help="Generation token budget. Completions are trimmed back "
-                              "to the last full sentence (see postprocess_completion), "
-                              "so a bigger budget leaves less on the floor.")
-    parser.add_argument("--temperature", type=float, default=0.8)
-    parser.add_argument("--top-k", type=int, default=40)
-    parser.add_argument("--top-p", type=float, default=0.9)
-    parser.add_argument("--repetition-penalty", type=float, default=1.1)
-    parser.add_argument("--greedy", action="store_true", help="Disable sampling")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--per-category-limit", type=int, default=None,
-                         help="Cap prompts per category, for a faster subset run "
-                              "(default: run every prompt in every active category)")
-    parser.add_argument("--out", default=None,
-                         help="Output HTML path (default: reports/qa_report_<label>_step<N>.html)")
-    parser.add_argument("--checkpoint", choices=["best", "latest", "final"], default=None,
-                        help="Which checkpoint to use (default: best, falling back to "
-                             "latest/final). Use 'latest' when best.pt has gone stale — "
-                             "e.g. after an eval-config change re-baselines the noise, or "
-                             "a corpus rebuild makes the test set genuinely harder.")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser(description="Run the QA prompt set and render an HTML report.")
+    p.add_argument("--preset", default=None, help="Model size preset to load")
+    p.add_argument("--checkpoint", choices=["best", "latest", "final"], default=None,
+                   help="Which checkpoint to use (default: best, falling back to "
+                        "latest/final). Use 'latest' to see current training state when "
+                        "best.pt has gone stale.")
+    p.add_argument("--cpu", action="store_true",
+                   help="Force CPU. Use this while a trainer holds the GPU — inference on "
+                        "the same device measurably slows training.")
+    p.add_argument("--max-new-tokens", type=int, default=200,
+                   help="Generation token budget. Completions are trimmed back to the "
+                        "last full sentence, so a bigger budget leaves less on the floor.")
+    p.add_argument("--temperature", type=float, default=0.8)
+    p.add_argument("--top-k", type=int, default=40)
+    p.add_argument("--top-p", type=float, default=0.9)
+    p.add_argument("--repetition-penalty", type=float, default=1.1)
+    p.add_argument("--greedy", action="store_true", help="Disable sampling")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--per-category-limit", type=int, default=None,
+                   help="Cap prompts per category, for a faster subset run")
+    p.add_argument("--no-sweep", action="store_true", help="Skip the parameter sweep")
+    p.add_argument("--out", default=None,
+                   help="Output HTML path (default: reports/qa_report_<label>_step<N>.html)")
+    args = p.parse_args()
 
     torch.manual_seed(args.seed)
-
     _, train_cfg, paths, label = load_settings(args.preset)
-    device = get_device()
+    device = "cpu" if args.cpu else get_device()
     checkpoint_path = select_checkpoint(paths, args.checkpoint)
     checkpoint, tokenizer, model = load_model(checkpoint_path, device)
     step = checkpoint.get("step", 0)
-    param_count = sum(p.numel() for p in model.parameters())
 
-    generation_settings = {
-        "max_new_tokens": args.max_new_tokens,
-        "temperature": args.temperature,
-        "top_k": args.top_k,
-        "top_p": args.top_p,
+    settings = {
+        "max_new_tokens": args.max_new_tokens, "temperature": args.temperature,
+        "top_k": args.top_k, "top_p": args.top_p,
         "repetition_penalty": args.repetition_penalty,
-        "sampling": not args.greedy,
+        "sampling": not args.greedy, "seed": args.seed, "device": device,
     }
 
     categories, skipped = _active_categories(paths.data_dir)
     if args.per_category_limit:
-        categories = [(c, qs[: args.per_category_limit]) for c, qs in categories]
+        categories = [(c, q[: args.per_category_limit]) for c, q in categories]
 
-    print(f"Model: {label} | checkpoint: {checkpoint_path} (step {step})")
-    total_prompts = sum(len(items) for _, items in categories)
-    print(f"Running {total_prompts} prompts across {len(categories)} categories...")
+    total = sum(len(q) for _, q in categories)
+    sweep_n = 0 if args.no_sweep else len(SWEEP_PROMPTS) * len(SWEEP_SETTINGS)
+    print(f"Model: {label} | {checkpoint_path} (step {step:,}) | device={device}")
+    print(f"Running {total} prompts across {len(categories)} categories"
+          f"{f' + {sweep_n} sweep generations' if sweep_n else ''}...")
     if skipped:
-        print(f"Skipped (source not found under {paths.data_dir / 'raw'}): {', '.join(skipped)}")
-    print()
+        print(f"Skipped (source not in {paths.data_dir / 'raw'}): {', '.join(skipped)}")
 
-    results = []
+    def ask(question, **overrides):
+        opts = dict(do_sample=not args.greedy, temperature=args.temperature,
+                    top_k=args.top_k, top_p=args.top_p,
+                    repetition_penalty=args.repetition_penalty)
+        opts.update(overrides)
+        _, answer = generate_text(
+            model=model, tokenizer=tokenizer, prompt=f"User: {question}\nAssistant:",
+            context_length=checkpoint["context_length"],
+            max_new_tokens=args.max_new_tokens, device=device, postprocess=True, **opts)
+        return answer
+
+    results, done = [], 0
     for category, questions in categories:
         answered = []
-        for question in questions:
-            prompt = f"User: {question}\nAssistant:"
-            _, answer = generate_text(
-                model=model,
-                tokenizer=tokenizer,
-                prompt=prompt,
-                context_length=checkpoint["context_length"],
-                max_new_tokens=args.max_new_tokens,
-                device=device,
-                do_sample=not args.greedy,
-                temperature=args.temperature,
-                top_k=args.top_k,
-                top_p=args.top_p,
-                repetition_penalty=args.repetition_penalty,
-                postprocess=True,
-            )
-            print(f"[{category}]\n  Q: {question}\n  A: {answer}\n")
-            answered.append((question, answer))
+        for q in questions:
+            answered.append((q, ask(q)))
+            done += 1
+            print(f"\r  [{done}/{total}] {category[:44]:<44}", end="", flush=True)
         results.append((category, answered))
+    print()
+
+    sweep = []
+    if not args.no_sweep:
+        for q in SWEEP_PROMPTS:
+            variants = []
+            for name, kw in SWEEP_SETTINGS:
+                # Same seed for every setting, so the only variable is the sampler.
+                torch.manual_seed(args.seed)
+                variants.append((name, ask(q, **kw)))
+            sweep.append((q, variants))
+            print(f"  sweep: {q[:52]}")
 
     out_path = Path(args.out) if args.out else Path("reports") / f"qa_report_{label}_step{step}.html"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(_build_html(
-        label=label,
-        param_count=param_count,
-        checkpoint_path=checkpoint_path,
-        step=step,
-        configured_steps=train_cfg.steps,
-        best_test_loss=checkpoint.get("best_test_loss"),
-        generation_settings=generation_settings,
-        results=results,
-        generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        skipped=skipped,
-    ), encoding="utf-8")
-
+        label=label, param_count=sum(t.numel() for t in model.parameters()),
+        checkpoint_path=checkpoint_path, step=step, configured_steps=train_cfg.steps,
+        best_test_loss=checkpoint.get("best_test_loss"), settings=settings,
+        results=results, sweep=sweep, skipped=skipped,
+        generated_utc=datetime.now(timezone.utc)), encoding="utf-8")
     print(f"saved_report: {out_path}")
 
 

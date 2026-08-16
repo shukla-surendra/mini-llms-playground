@@ -1,4 +1,4 @@
-.PHONY: help setup config presets data data-public tokenize tokenize-force benchmark benchmark-quick audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets data data-public tokenize tokenize-force benchmark benchmark-quick score audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
 
@@ -77,6 +77,10 @@ benchmark: setup
 
 benchmark-quick: setup
 	uv run gpt-benchmark --warmup-min 2 --measure-min 5 --synthetic
+
+# Objective, comparable score for a checkpoint (accuracy / constraints / MC).
+score: setup
+	uv run gpt-score --checkpoint latest
 
 audit: setup
 	uv run gpt-audit

@@ -1,0 +1,46 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is gitignored)
+
+region  = "us-east-1"
+project = "mini-llm-gpu"
+
+# ---- compute -------------------------------------------------------------
+# This file is written in "cheap mode": spot capacity, frequent checkpoint sync,
+# an aggressive idle stop. The variable DEFAULTS in variables.tf are the safer,
+# more conservative values — this is the deliberate cost-optimised deviation.
+instance_type  = "g6.xlarge" # L4 24GB, bf16 + TF32
+root_volume_gb = 100
+
+# The single biggest lever: ~60-70% off the GPU hour. Check `make spot-price`
+# first. Safe here only because checkpoint_sync_minutes keeps latest.pt in S3 and
+# a watcher flushes it again on the 2-minute interruption notice.
+use_spot = true
+
+# ---- access --------------------------------------------------------------
+public_key_path      = "~/.ssh/id_ed25519.pub"
+ssh_private_key_path = "~/.ssh/id_ed25519"
+
+# Leave empty to auto-detect this machine's public IP as a /32.
+# allowed_ssh_cidrs = ["203.0.113.10/32"]
+
+# ---- storage / bootstrap -------------------------------------------------
+create_bucket = true
+# bucket_name = "my-existing-llm-bucket"
+
+repo_url       = "https://github.com/shukla-surendra/tiny_llm.git"
+project_subdir = "from_scratch/custom-gpt-153m"
+
+# Prefix synced into <project_subdir>/data at boot. Upload the token files first:
+#   make upload-corpus
+corpus_prefix = "153m/corpus/"
+
+# ---- cost guards ---------------------------------------------------------
+# Required by use_spot: caps what a reclaim can destroy at one interval.
+checkpoint_sync_minutes = 10
+
+# Aggressive on purpose. An idle GPU is a finished, crashed, or never-started run;
+# none of those are worth paying for. Pause it on the box: touch ~/.no-idle-shutdown
+idle_shutdown_minutes = 15
+
+# Free for the first two budgets per account. Set both to arm it.
+monthly_budget_usd = 30
+# budget_alert_email = "you@example.com"

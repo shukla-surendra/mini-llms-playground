@@ -152,3 +152,10 @@ All three tracks are meant to hold more than one experiment over time. To add on
    runnable independently.
 3. Add a row to this page's per-track table, and to the top-level [`README.md`](../README.md)
    if it's significant enough to headline.
+
+- [`AWS_RUNBOOK.md`](AWS_RUNBOOK.md) — running a training job on AWS: EC2 vs
+  SageMaker, provisioning, shipping the corpus, detaching the run, and not leaving
+  a GPU billing overnight.
+- [`infra/aws-gpu-node/`](../infra/aws-gpu-node/) — the runbook's EC2 box as Terraform
+  (instance, gp3 root, security group, S3 bucket, IAM instance role, GPU-idle
+  auto-stop, budget alert). The runbook explains the *why*; this applies it.

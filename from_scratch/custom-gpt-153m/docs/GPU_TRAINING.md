@@ -5,6 +5,10 @@ unlike the sibling `custom-gpt-{10m,50m}` projects, whose `batch_size=1` exists 
 MPS. Everything below is what those defaults are, why, and the order to do things in
 so that billed hours go to training rather than to setup.
 
+> Provisioning, SSH, data transfer, cost control and EC2-vs-SageMaker:
+> [`../../../docs/AWS_RUNBOOK.md`](../../../docs/AWS_RUNBOOK.md). This page is
+> about *what* to train and on which GPU; that one is about running it on AWS.
+
 ## The sizing decision
 
 Chinchilla-optimal training is about **20 tokens per parameter** (`C ≈ 6ND`, `D ≈ 20N`,

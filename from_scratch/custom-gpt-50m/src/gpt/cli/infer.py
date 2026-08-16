@@ -2,7 +2,7 @@
 
 import argparse
 
-from ..checkpoint import load_model, resolve_serving_checkpoint
+from ..checkpoint import load_model, select_checkpoint
 from ..config import load_settings
 from ..data import load_prompts
 from ..inference import generate_text
@@ -22,11 +22,16 @@ def main():
     parser.add_argument("--greedy", action="store_true", help="Disable sampling")
     parser.add_argument("--limit", type=int, default=5,
                         help="Max prompts to run from the prompt file")
+    parser.add_argument("--checkpoint", choices=["best", "latest", "final"], default=None,
+                        help="Which checkpoint to load (default: best, falling back to "
+                             "latest/final). Use 'latest' to exercise the CURRENT training "
+                             "state — best.pt only updates when test loss beats its prior "
+                             "record, so it can lag the live model by a long way.")
     args = parser.parse_args()
 
     _, _, paths, label = load_settings(args.preset)
     device = get_device()
-    checkpoint_path = resolve_serving_checkpoint(paths)
+    checkpoint_path = select_checkpoint(paths, args.checkpoint)
     checkpoint, tokenizer, model = load_model(checkpoint_path, device)
 
     prompts = [args.prompt] if args.prompt else load_prompts(paths.test_prompts)[: args.limit]

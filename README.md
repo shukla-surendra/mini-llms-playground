@@ -59,6 +59,14 @@ training track: turns an arbitrary local folder (`.pdf`/`.epub`/`.txt`/`.md`/`.r
 train/test split) — the local-folder complement to the from-scratch track's
 Hugging-Face-dataset pipeline.
 
+## Infra
+
+[`infra/aws-gpu-node`](infra/aws-gpu-node/) — Terraform for the AWS GPU box these tracks
+train on (`g6.xlarge`, Deep Learning Base AMI, 100 GB gp3, S3 corpus/checkpoint bucket,
+IAM instance role, and an automatic stop when the GPU goes idle). It is the executable
+form of [`docs/AWS_RUNBOOK.md`](docs/AWS_RUNBOOK.md), which still holds the reasoning
+behind each choice.
+
 ## Full docs
 
 See [`docs/README.md`](docs/README.md) for a fuller comparison of the two tracks, when to
