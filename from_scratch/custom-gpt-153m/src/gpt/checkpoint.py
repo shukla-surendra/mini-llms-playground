@@ -107,8 +107,19 @@ def remap_attn_impl(state_dict, num_layers, from_impl, to_impl):
     return remapped
 
 
-def load_model(checkpoint_path, device, eval_mode=True):
+def load_model(checkpoint_path, device, eval_mode=True, force_attn_impl="sdpa"):
     """Rebuild the exact TinyGPT a checkpoint was saved from.
+
+    `force_attn_impl` defaults to "sdpa" regardless of what the checkpoint was trained
+    under — every current caller of load_model() is an inference path (CLI infer,
+    qa-report, API server, eval/judge/score), and only the "sdpa" CausalSelfAttention
+    implements the KV-cache generate_text() needs to avoid reprocessing the whole
+    sequence on every new token (see model.py's "KV caching" docstring section). A
+    "naive"-trained checkpoint's weights are numerically identical under "sdpa" — just
+    different parameter names — so remap_attn_impl() converts them with no precision
+    loss, same mechanism trainer.py already uses to resume a run under a different
+    ATTN_IMPL than it was last saved with. Pass force_attn_impl=None to load under
+    whatever attn_impl the checkpoint actually recorded, unmodified.
 
     Returns (checkpoint, tokenizer, model); callers commonly need
     checkpoint["context_length"] for generation.
@@ -123,6 +134,9 @@ def load_model(checkpoint_path, device, eval_mode=True):
     checkpoint = torch.load(checkpoint_path, map_location=device)
     tokenizer = tiktoken.get_encoding(checkpoint.get("tokenizer", TOKENIZER_NAME))
 
+    checkpoint_attn_impl = checkpoint.get("attn_impl", "naive")
+    attn_impl = force_attn_impl or checkpoint_attn_impl
+
     model = TinyGPT(
         vocab_size=checkpoint["vocab_size"],
         context_length=checkpoint["context_length"],
@@ -130,9 +144,16 @@ def load_model(checkpoint_path, device, eval_mode=True):
         num_heads=checkpoint["num_heads"],
         num_layers=checkpoint["num_layers"],
         dropout=checkpoint.get("dropout", 0.0),
-        attn_impl=checkpoint.get("attn_impl", "naive"),
+        attn_impl=attn_impl,
     ).to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
+
+    state_dict = checkpoint["model_state_dict"]
+    if attn_impl != checkpoint_attn_impl:
+        state_dict = remap_attn_impl(
+            state_dict, num_layers=checkpoint["num_layers"],
+            from_impl=checkpoint_attn_impl, to_impl=attn_impl,
+        )
+    model.load_state_dict(state_dict)
     if eval_mode:
         model.eval()
 

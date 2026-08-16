@@ -37,6 +37,19 @@ A GELU MLP is two matrices: `E -> 4E -> E`, i.e. `8E^2` parameters. SwiGLU is th
 gate and up (`E -> f`) plus down (`f -> E`), i.e. `3Ef`. Setting `f = (8/3)E` makes
 `3Ef = 8E^2` — identical parameter cost, and empirically better quality. That is why
 `ffn_hidden` defaults to roughly `2.67 x embed_size` rather than `4 x`.
+
+## KV caching (generation only)
+
+`TinyGPT.forward(x, past_kv=None, use_cache=False, start_pos=0)` — with `use_cache=False`
+(the default), every call is independent and the return value (`logits`) is unchanged,
+so training's plain `model(window)` calls are unaffected. With `use_cache=True`, each
+layer's already-rotated key/value tensors for `x`'s tokens come back alongside the
+output and can be passed in as `past_kv` on the next call, so a 1-new-token decode step
+only computes and rotates that one token's Q/K/V instead of redoing every earlier
+token's from scratch. Unlike the sibling GPT-2-style projects, there is no attn_impl
+branch to worry about here — SDPA is the only attention path, so every model built from
+this file supports caching unconditionally (see inference/generate.py's generate_text(),
+the only caller that uses this).
 """
 
 import torch
@@ -111,7 +124,16 @@ class CausalSelfAttention(nn.Module):
         self.attn_dropout_p = dropout
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, past_kv=None, use_cache=False):
+        """KV caching (generation only, see TinyGPT.forward and the module-level note
+        in inference/generate.py). `cos`/`sin` are always the caller-sliced tables for
+        x's actual absolute positions — see TinyGPT.forward — so apply_rope's own
+        internal `[:seq_len]` slice is a no-op here, not a second, different slice.
+        `past_kv`, when given, holds already-rotated key/value tensors from earlier
+        calls; concatenating them with this call's freshly-rotated k/v is valid because
+        RoPE rotates each token by its own absolute position exactly once, and that
+        rotation never changes after the fact.
+        """
         batch, seq_len, _ = x.shape
         q, k, v = self.in_proj(x).chunk(3, dim=-1)
         # (batch, seq, embed) -> (batch, heads, seq, head_dim)
@@ -123,13 +145,22 @@ class CausalSelfAttention(nn.Module):
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
+        if past_kv is not None:
+            past_k, past_v = past_kv
+            k = torch.cat([past_k, k], dim=2)
+            v = torch.cat([past_v, v], dim=2)
+
+        # is_causal only masks x's OWN tokens against each other (the multi-token
+        # prefill case, past_kv=None) — once a cache exists, every key came from a
+        # strictly earlier call than this one's queries, so nothing needs masking.
         out = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.attn_dropout_p if self.training else 0.0,
-            is_causal=True,
+            is_causal=(past_kv is None),
         )
         out = out.transpose(1, 2).contiguous().view(batch, seq_len, self.embed_size)
-        return self.dropout(self.out_proj(out))
+        out = self.dropout(self.out_proj(out))
+        return (out, (k, v)) if use_cache else out
 
 
 class SwiGLU(nn.Module):
@@ -159,10 +190,14 @@ class GPTBlock(nn.Module):
         self.norm_2 = RMSNorm(embed_size)
         self.mlp = SwiGLU(embed_size, ffn_hidden, dropout)
 
-    def forward(self, x, cos, sin):
-        x = x + self.attn(self.norm_1(x), cos, sin)
+    def forward(self, x, cos, sin, past_kv=None, use_cache=False):
+        attn_out = self.attn(self.norm_1(x), cos, sin, past_kv=past_kv, use_cache=use_cache)
+        new_kv = None
+        if use_cache:
+            attn_out, new_kv = attn_out
+        x = x + attn_out
         x = x + self.mlp(self.norm_2(x))
-        return x
+        return (x, new_kv) if use_cache else x
 
 
 class TinyGPT(nn.Module):
@@ -223,17 +258,37 @@ class TinyGPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, x):
+    def forward(self, x, past_kv=None, use_cache=False, start_pos=0):
+        """past_kv/use_cache/start_pos are the incremental-decoding API (generation
+        only — see inference/generate.py's generate_text()). `start_pos` is the
+        absolute position of x's first token: 0 for a fresh/prefill call, or the
+        running sequence length so far for a decode step continuing an existing cache
+        — RoPE needs the true absolute position to rotate by, not just x's own local
+        offset, exactly like the sibling projects' learned pos_emb does.
+
+        With use_cache=False (the default), behavior and the return value (just
+        `logits`) are exactly what they were before caching existed, so training's
+        plain `model(window)` calls are entirely unaffected.
+        """
         _, seq_len = x.shape
-        if seq_len > self.context_length:
+        if start_pos + seq_len > self.context_length:
             raise ValueError(
-                f"sequence length {seq_len} exceeds context_length {self.context_length}; "
-                f"the RoPE cache is only built that far."
+                f"sequence length {start_pos + seq_len} exceeds context_length "
+                f"{self.context_length}; the RoPE cache is only built that far."
             )
         h = self.drop(self.token_emb(x))
-        cos = self.rope_cos[:seq_len]
-        sin = self.rope_sin[:seq_len]
-        for block in self.blocks:
-            h = block(h, cos, sin)
+        cos = self.rope_cos[start_pos:start_pos + seq_len]
+        sin = self.rope_sin[start_pos:start_pos + seq_len]
+
+        new_past_kv = [] if use_cache else None
+        for i, block in enumerate(self.blocks):
+            layer_past = past_kv[i] if past_kv is not None else None
+            out = block(h, cos, sin, past_kv=layer_past, use_cache=use_cache)
+            if use_cache:
+                h, kv = out
+                new_past_kv.append(kv)
+            else:
+                h = out
         h = self.norm_f(h)
-        return self.lm_head(h)
+        logits = self.lm_head(h)
+        return (logits, new_past_kv) if use_cache else logits

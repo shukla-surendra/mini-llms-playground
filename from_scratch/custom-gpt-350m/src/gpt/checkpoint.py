@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 
-from .config import TOKENIZER_NAME, TOKENIZER_PATH
+from .config import PRESETS, TOKENIZER_NAME, TOKENIZER_PATH
 from .model import TinyGPT
 from .tokenizer import load_tokenizer
 
@@ -45,6 +45,8 @@ def make_payload(model, optimizer, model_cfg, train_cfg, context_length, step,
         "num_heads": model_cfg.num_heads,
         "num_layers": model_cfg.num_layers,
         "dropout": model_cfg.dropout,
+        "ffn_hidden": model_cfg.ffn_hidden,
+        "rope_theta": model_cfg.rope_theta,
         "preset_label": label,
         "param_count": model.param_count(),
         # Which attention kernel this state_dict's parameter names/shapes match —
@@ -126,14 +128,43 @@ def load_model(checkpoint_path, device, eval_mode=True):
     # live on disk and must be the same file.
     tokenizer = load_tokenizer(TOKENIZER_PATH)
 
+    # NOTE: no attn_impl kwarg here — this project's TinyGPT (RoPE + SDPA-only, see
+    # model.py) doesn't accept one; that used to be passed anyway, a leftover from
+    # copying this file from the sibling GPT-2-style projects before the RoPE rewrite
+    # trimmed the attn_impl switch out of model.py, and it made every load_model() call
+    # raise TypeError unconditionally. remap_attn_impl()/make_payload()'s "attn_impl"
+    # field are dead code here for the same reason — left alone, out of scope for this
+    # fix, since neither one crashes anything on its own.
+    #
+    # ffn_hidden/rope_theta: make_payload() didn't save these until just now, so any
+    # checkpoint written before this fix has neither key (confirmed against real
+    # checkpoints on disk) — without ffn_hidden specifically, TinyGPT can't even be
+    # constructed (SwiGLU's hidden width has no other source of truth). Recover both
+    # from the matching named preset in PRESETS via the checkpoint's own preset_label
+    # (always saved) when they're missing; preset_label is only useful as a recovery
+    # key when the run used a plain preset, not a custom GPT_FFN_HIDDEN/GPT_ROPE_THETA
+    # override, so this is a best-effort fallback for pre-existing checkpoints, not a
+    # substitute for the real fix above.
+    preset = PRESETS.get(checkpoint.get("preset_label"))
+    if "ffn_hidden" not in checkpoint and preset is None:
+        raise KeyError(
+            f"{checkpoint_path} has no 'ffn_hidden' (saved before that field existed) "
+            f"and its preset_label {checkpoint.get('preset_label')!r} isn't a known "
+            f"preset in PRESETS, so the SwiGLU hidden width can't be recovered. "
+            f"Retrain, or edit this checkpoint's preset_label to the closest match."
+        )
+    ffn_hidden = checkpoint.get("ffn_hidden", preset.ffn_hidden if preset else None)
+    rope_theta = checkpoint.get("rope_theta", preset.rope_theta if preset else 10000.0)
+
     model = TinyGPT(
         vocab_size=checkpoint["vocab_size"],
         context_length=checkpoint["context_length"],
         embed_size=checkpoint["embed_size"],
         num_heads=checkpoint["num_heads"],
         num_layers=checkpoint["num_layers"],
+        ffn_hidden=ffn_hidden,
         dropout=checkpoint.get("dropout", 0.0),
-        attn_impl=checkpoint.get("attn_impl", "naive"),
+        rope_theta=rope_theta,
     ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     if eval_mode:

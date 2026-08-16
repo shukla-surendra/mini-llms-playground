@@ -107,24 +107,45 @@ def generate_text(
         tokenizer.encode(prompt, allowed_special={DOCUMENT_SEPARATOR}, disallowed_special=()),
         device=device,
     ).unsqueeze(0)
+    ids = ids[:, -context_length:]  # cap an over-long prompt, same as the old sliding window
 
-    for _ in range(max_new_tokens):
-        window = ids[:, -context_length:]
-        logits = model(window)
-        next_logits = apply_repetition_penalty(
-            logits[:, -1, :],
-            ids,
-            penalty=repetition_penalty,
-            window_size=context_length,
-        )
-        next_token = sample_next_token(
-            next_logits,
-            do_sample=do_sample,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-        )
-        ids = torch.cat([ids, next_token], dim=1)
+    use_kv_cache = getattr(model, "attn_impl", "naive") == "sdpa"
+
+    if use_kv_cache:
+        # Prefill: one forward pass over the whole prompt, building the initial cache.
+        # Every decode step after this processes exactly ONE new token instead of
+        # reprocessing the whole sequence-so-far — see model.py's "KV caching" docstring
+        # section. Capped so the KV cache (and position embeddings) never grow past
+        # context_length; an already-full prompt yields 0 decode steps rather than
+        # erroring, same spirit as the old code silently working with whatever fit.
+        logits, past_kv = model(ids, use_cache=True)
+        steps = max(0, min(max_new_tokens, context_length - ids.size(1)))
+
+        for _ in range(steps):
+            next_logits = apply_repetition_penalty(
+                logits[:, -1, :], ids, penalty=repetition_penalty, window_size=context_length,
+            )
+            next_token = sample_next_token(
+                next_logits, do_sample=do_sample, temperature=temperature, top_k=top_k, top_p=top_p,
+            )
+            ids = torch.cat([ids, next_token], dim=1)
+            logits, past_kv = model(next_token, past_kv=past_kv, use_cache=True, start_pos=ids.size(1) - 1)
+    else:
+        # "naive" attn_impl has no incremental-decoding path (see model.py) — fall back
+        # to the original full-reprocess-every-step loop. Reached only when generate_text
+        # is called with a model built directly under attn_impl="naive" (e.g. during
+        # training's periodic sample generation) rather than via checkpoint.load_model(),
+        # which defaults inference to "sdpa" specifically to avoid this path.
+        for _ in range(max_new_tokens):
+            window = ids[:, -context_length:]
+            logits = model(window)
+            next_logits = apply_repetition_penalty(
+                logits[:, -1, :], ids, penalty=repetition_penalty, window_size=context_length,
+            )
+            next_token = sample_next_token(
+                next_logits, do_sample=do_sample, temperature=temperature, top_k=top_k, top_p=top_p,
+            )
+            ids = torch.cat([ids, next_token], dim=1)
 
     full_text = tokenizer.decode(ids[0].tolist())
     raw_completion = full_text[len(prompt):] if full_text.startswith(prompt) else full_text

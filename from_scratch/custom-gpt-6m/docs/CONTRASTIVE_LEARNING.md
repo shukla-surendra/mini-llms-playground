@@ -110,7 +110,7 @@ itself.
 
 ## The gotcha: this project's `estimate_loss` can't use `torch.no_grad()` on MPS
 
-Every other `estimate_loss` in this project (`train.py`, `train_mlm.py`) wraps evaluation
+Every other `estimate_loss` in this project (`trainer.py`, `trainer_mlm.py`) wraps evaluation
 in `@torch.no_grad()`, since eval never needs gradients. This one can't, unconditionally,
 on Apple Silicon: `nn.MultiheadAttention` with `dropout_p > 0` routes into a fast
 inference-only code path built on `F.scaled_dot_product_attention` as soon as gradient
@@ -118,7 +118,7 @@ tracking is off, and `NotImplementedError: scaled_dot_product_attention for MPS 
 support dropout` is a real error this project hit running exactly that combination during
 development — not a hypothetical edge case. Since this objective's evaluation genuinely
 needs dropout to stay active (that's what makes `z1 != z2`), `estimate_loss` in
-[`train_contrastive.py`](../train_contrastive.py) keeps gradients enabled specifically on
+[`trainer_contrastive.py`](../src/gpt/training/trainer_contrastive.py) keeps gradients enabled specifically on
 MPS (harmless here — nothing calls `.backward()` on the resulting graph, so it's discarded
 immediately) while still using `torch.no_grad()` on CUDA/CPU, where this MPS-specific
 kernel limitation doesn't apply.

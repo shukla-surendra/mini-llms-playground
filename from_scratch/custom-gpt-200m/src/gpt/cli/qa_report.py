@@ -20,71 +20,7 @@ from ..config import load_settings
 from ..data.sources import DATASETS
 from ..inference import generate_text
 from ..runtime import get_device
-
-# Prompt count per category is weighted by that source's role in the training mix
-# (docs/DATASETS.md): UltraChat/OASST1/LMSYS are the bulk conversational volume, so
-# they get the most coverage; Dolly is small but hand-written across seven distinct
-# task types, so it gets one prompt per documented type instead of a volume-based
-# count; SmolTalk is a compact mixture, so a handful spanning its stated sub-domains.
-QA_CATEGORIES = [
-    ("UltraChat-style (bulk everyday-assistant Q&A)", [
-        "What are three simple ways to stay productive while working from home?",
-        "Can you explain what a black hole is in simple terms?",
-        "I'm planning a trip to Japan. What should I pack?",
-        "What's a good beginner recipe for homemade pizza?",
-        "How can I improve my public speaking skills?",
-        "What are the benefits of regular exercise?",
-    ]),
-    ("OASST1-style (human-phrased, sometimes messier)", [
-        "whats the difference between a virus and bacteria? also which one antibiotics work on",
-        "Can you help me write a short apology message to a friend I forgot to call back?",
-        "why is the sky blue? explain like im five",
-        "whats a good way to learn a new language fast, ive tried apps before but they didnt stick",
-        "can u give me tips for a job interview tmrw im nervous",
-    ]),
-    ("Dolly-style (one prompt per documented task type)", [
-        "Brainstorm five names for a small coffee shop.",                                    # brainstorming
-        "Classify the following as a fruit or a vegetable: tomato, carrot, apple, spinach.",  # classification
-        "What is the capital of France?",                                                     # closed QA
-        "Why do leaves change color in autumn?",                                              # open QA
-        "Write a short two-sentence story about a lost dog finding its way home.",            # generation
-        "Summarize in one sentence: The Great Wall of China is a series of fortifications "
-        "built across the historical northern borders of China to protect against invasions.",  # summarization
-        "Extract the person's name and age from this sentence: \"John Smith, aged 34, "
-        "joined the company last year.\"",                                                    # extraction
-    ]),
-    ("SmolTalk-style (dialogue / reasoning / rewriting / summarization)", [
-        "What's your favorite way to spend a weekend?",
-        "If a train leaves at 3pm and travels for 2 hours 45 minutes, what time does it arrive?",
-        "Rewrite this sentence to sound more formal: \"hey can u send me that file asap\"",
-        "Summarize this in one sentence: Regular sleep, a balanced diet, and daily exercise "
-        "are the three pillars most doctors recommend for maintaining long-term health.",
-        "What's something interesting you'd want to learn more about?",
-    ]),
-    ("LMSYS-style (casual, unfiltered real-user phrasing)", [
-        "yo whats a good movie to watch tonight im bored",
-        "fix this code its not working: def add(a,b) return a+b",
-        "can you write me a poem about cats idk make it funny",
-        "whats 15% tip on a $42 bill",
-        "explain quantum computing but like im dumb",
-        "give me a random fun fact",
-    ]),
-    ("Format-following (does it respect the role boundary?)", [
-        "What's your name?",
-        "Can you help me?",
-    ]),
-]
-
-# Maps each category above to the dataset registry entry it's modeled on, so a
-# category can be skipped automatically if that source wasn't actually part of the
-# corpus this checkpoint was trained on (e.g. gated LMSYS skipped by `make data-public`).
-_CATEGORY_SOURCE_HF_ID = {
-    "UltraChat-style (bulk everyday-assistant Q&A)": "HuggingFaceH4/ultrachat_200k",
-    "OASST1-style (human-phrased, sometimes messier)": "OpenAssistant/oasst1",
-    "Dolly-style (one prompt per documented task type)": "zidankhan/databricks-dolly-15k",
-    "SmolTalk-style (dialogue / reasoning / rewriting / summarization)": "HuggingFaceTB/smoltalk",
-    "LMSYS-style (casual, unfiltered real-user phrasing)": "lmsys/lmsys-chat-1m",
-}
+from .qa_prompts import CATEGORY_SOURCE_HF_ID, QA_CATEGORIES
 
 
 def _active_categories(data_dir):
@@ -94,7 +30,7 @@ def _active_categories(data_dir):
     sources_by_id = {ds.hf_id: ds for ds in DATASETS}
     active, skipped = [], []
     for category, questions in QA_CATEGORIES:
-        hf_id = _CATEGORY_SOURCE_HF_ID.get(category)
+        hf_id = CATEGORY_SOURCE_HF_ID.get(category)
         if hf_id is None:
             active.append((category, questions))
             continue

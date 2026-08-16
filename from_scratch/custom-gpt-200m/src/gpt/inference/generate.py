@@ -108,10 +108,16 @@ def generate_text(
         tokenizer.encode(prompt, allowed_special={DOCUMENT_SEPARATOR}, disallowed_special=()),
         device=device,
     ).unsqueeze(0)
+    ids = ids[:, -context_length:]  # cap an over-long prompt, same as the old sliding window
 
-    for _ in range(max_new_tokens):
-        window = ids[:, -context_length:]
-        logits = model(window)
+    # Prefill: one forward pass over the whole prompt, building the initial KV cache —
+    # see model.py's "KV caching" docstring section. Unlike the sibling GPT-2-style
+    # projects there's no attn_impl branch to consider: SDPA is this project's only
+    # attention path, so every model here supports the cached loop unconditionally.
+    logits, past_kv = model(ids, use_cache=True)
+    steps = max(0, min(max_new_tokens, context_length - ids.size(1)))
+
+    for _ in range(steps):
         next_logits = apply_repetition_penalty(
             logits[:, -1, :],
             ids,
@@ -134,6 +140,8 @@ def generate_text(
         # hallucinated second "User:" turn ends up in their QA reports.
         if eot_id is not None and int(next_token.item()) == eot_id:
             break
+
+        logits, past_kv = model(next_token, past_kv=past_kv, use_cache=True, start_pos=ids.size(1) - 1)
 
     full_text = tokenizer.decode(ids[0].tolist())
     raw_completion = full_text[len(prompt):] if full_text.startswith(prompt) else full_text

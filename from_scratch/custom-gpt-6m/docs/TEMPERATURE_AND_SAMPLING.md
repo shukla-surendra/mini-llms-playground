@@ -5,11 +5,11 @@ temperature, top-k, top-p, the worked numerical example, and why `temperature=0`
 mathematically identical to greedy decoding — is covered in full in
 [Chapter 21 — Inference Mechanics: Decoding, Sampling, and KV Cache](../../../docs/llm-engineering/21_inference_mechanics_decoding_sampling_and_kv_cache.md).
 This doc only covers what's specific to this project: the default values in
-[`inference.py`](../inference.py), and practical guidance for its `/generate` endpoint.
+[`generate.py`](../src/gpt/inference/generate.py), and practical guidance for its `/generate` endpoint.
 
 ## Grounded in This Project's Code
 
-[`../inference.py`](../inference.py)'s `sample_next_token`:
+[`../src/gpt/inference/generate.py`](../src/gpt/inference/generate.py)'s `sample_next_token`:
 
 ```python
 def sample_next_token(logits, temperature=0.8, top_k=40, top_p=0.9):

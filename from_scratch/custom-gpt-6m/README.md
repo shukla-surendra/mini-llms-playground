@@ -16,40 +16,46 @@ garbage.** That's a narrower, genuinely achievable target, and every design deci
 
 ## What this project includes
 
-- **Dataset + tokenizer prep**: `prepare_dataset.py` — downloads
+This is an installable package (`src/gpt/`) with `pyproject.toml`-registered CLI commands
+(`gpt-*`), the same convention every sibling `custom-gpt-*` project in
+[`from_scratch/`](../) uses — `make <target>` wraps each one.
+
+- **Dataset + tokenizer prep**: `gpt-data` (`src/gpt/data/prepare.py`) — downloads
   [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) (short, simple
   children's stories with a deliberately restricted vocabulary), trains a small custom
   BPE tokenizer (`vocab_size=4096`) on it, and writes tokenized train/val splits.
-- **Model**: `model.py` — a ~5.85M-parameter decoder-only Transformer, the same
+- **Model**: `src/gpt/model.py` — a ~5.85M-parameter decoder-only Transformer, the same
   architecture family as [`../custom-gpt-153m/tiny_llm.py`](../custom-gpt-153m/tiny_llm.py),
   every dimension scaled down. Full sizing reasoning in
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-- **Training**: `train.py` — MPS-first (also runs on CUDA/CPU), with checkpointing,
-  resume, and train/val loss tracking. Full mechanism and real, observed MPS performance
-  numbers in [`docs/TRAINING.md`](docs/TRAINING.md).
+- **Training**: `gpt-train` (`src/gpt/training/trainer.py`) — MPS-first (also runs on
+  CUDA/CPU), with checkpointing, resume, and train/val loss tracking. Full mechanism and
+  real, observed MPS performance numbers in [`docs/TRAINING.md`](docs/TRAINING.md).
 - **Efficient training**: switchable naive/fused attention (`ATTN_IMPL=naive|sdpa`), mixed
   precision (`AMP=1`), and gradient checkpointing (`GRAD_CHECKPOINT=1`) — all real flags on
-  `train.py`/`model.py`, benchmarked with actual measured numbers (throughput and memory)
+  `trainer.py`/`model.py`, benchmarked with actual measured numbers (throughput and memory)
   in [`docs/EFFICIENT_TRAINING.md`](docs/EFFICIENT_TRAINING.md).
-- **Masked language modeling**: `model_mlm.py` + `train_mlm.py` — a second, bidirectional
-  pretraining objective (BERT-style masked LM) reusing this project's blocks and tokenized
-  data, trained separately from the causal-LM path above. Full explanation and real
-  results in [`docs/MASKED_LM.md`](docs/MASKED_LM.md).
-- **Contrastive self-supervised learning**: `model_contrastive.py` + `train_contrastive.py`
-  — a third pretraining objective (SimCSE-style positive pairs, in-batch-negative InfoNCE
-  loss), built on top of the *unchanged* causal backbone used as a sequence encoder.
-  Full explanation and real results in
+- **Masked language modeling**: `src/gpt/model_mlm.py` + `gpt-train-mlm` — a second,
+  bidirectional pretraining objective (BERT-style masked LM) reusing this project's blocks
+  and tokenized data, trained separately from the causal-LM path above. Full explanation
+  and real results in [`docs/MASKED_LM.md`](docs/MASKED_LM.md).
+- **Contrastive self-supervised learning**: `src/gpt/model_contrastive.py` +
+  `gpt-train-contrastive` — a third pretraining objective (SimCSE-style positive pairs,
+  in-batch-negative InfoNCE loss), built on top of the *unchanged* causal backbone used as
+  a sequence encoder. Full explanation and real results in
   [`docs/CONTRASTIVE_LEARNING.md`](docs/CONTRASTIVE_LEARNING.md).
-- **Distributed training**: `train_ddp.py` + `train_fsdp.py` — DistributedDataParallel and
-  FullyShardedDataParallel, wrapping the same causal-LM model/data, run for real as
+- **Distributed training**: `gpt-train-ddp` + `gpt-train-fsdp` — DistributedDataParallel
+  and FullyShardedDataParallel, wrapping the same causal-LM model/data, run for real as
   multi-process CPU jobs on this machine (`gloo` backend — a mechanism proof, not a
   GPU-cluster benchmark; two real environment-specific bugs hit and fixed along the way).
   Full explanation and real results in
   [`docs/DISTRIBUTED_TRAINING.md`](docs/DISTRIBUTED_TRAINING.md).
-- **Inference**: `inference.py` — command-line text generation from a checkpoint.
-- **API server**: `api_server.py` — FastAPI serving endpoint. Full explanation in
-  [`docs/SERVING.md`](docs/SERVING.md).
-- **Workflow script**: `scripts/workflow.sh` — one-command pipeline.
+- **Inference**: `gpt-infer` (`src/gpt/inference/generate.py`) — command-line text
+  generation from a checkpoint.
+- **API server**: `gpt-serve` (`src/gpt/inference/server.py`) — FastAPI serving endpoint.
+  Full explanation in [`docs/SERVING.md`](docs/SERVING.md).
+- **Workflow script**: `scripts/workflow.sh` — one-command pipeline, now wrapping the
+  `gpt-*` CLI commands (`uv run gpt-data`/`gpt-train`/`gpt-infer`/`gpt-serve`).
 
 ## Quickstart
 
@@ -87,14 +93,12 @@ make train                     # start (or resume, if a checkpoint already exist
 ```bash
 # stop: press Ctrl-C at any time
 ```
-`train.py` catches the interrupt, saves `checkpoints/6m/causal/latest.pt`, and
+`trainer.py` catches the interrupt, saves `checkpoints/6m/causal/latest.pt`, and
 exits — the checkpoint from the step you stopped at is safely on disk before the process
 returns control to the shell.
 
 ```bash
 make train                     # resume: re-run the same command, picks up from latest.pt
-# or, to make the intent explicit:
-make train-resume
 ```
 Resuming is the *default* behavior of `make train` — it happens automatically whenever
 `checkpoints/6m/causal/latest.pt` exists, no flag needed. The resumed run also
@@ -105,7 +109,7 @@ corrupting the run.
 ```bash
 make train-fresh               # start over, ignoring any existing checkpoint
 # or, equivalently:
-RESUME_TRAINING=0 uv run train.py
+uv run gpt-train --no-resume
 ```
 Use this when you deliberately want to discard progress and retrain from step 0 —
 otherwise `make train` always continues where the last run left off.
@@ -117,7 +121,7 @@ snapshotting a checkpoint before a new training round so a bad round can be roll
 
 ## Real results from this project's own training run
 
-Actually run on a MacBook, Apple Silicon MPS, `STEPS=4000`, default 100k-story subset
+Actually run on a MacBook, Apple Silicon MPS, `GPT_STEPS=4000`, default 100k-story subset
 (~22.4M training tokens). Total wall-clock time: **~15 minutes**, including dataset
 download, tokenizer training, and all evaluation passes.
 
@@ -171,9 +175,10 @@ on why narrowing the dataset (not just shrinking the model) is what actually mak
   why a custom small vocabulary, the exact data pipeline.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — every sizing decision, with the full
   parameter-count derivation.
-- [`docs/CODE_WALKTHROUGH.md`](docs/CODE_WALKTHROUGH.md) — `model.py` and `train.py`,
-  every class/function explained: the exact math, why each API/approach was chosen, and
-  the real alternatives (flash attention, SwiGLU, RoPE, RMSNorm, and more).
+- [`docs/CODE_WALKTHROUGH.md`](docs/CODE_WALKTHROUGH.md) — `src/gpt/model.py` and
+  `src/gpt/training/trainer.py`, every class/function explained: the exact math, why each
+  API/approach was chosen, and the real alternatives (flash attention, SwiGLU, RoPE,
+  RMSNorm, and more).
 - [`docs/TRAINING.md`](docs/TRAINING.md) — hyperparameters, real MPS throughput numbers,
   resume behavior, how to diagnose a bad run.
 - [`docs/EFFICIENT_TRAINING.md`](docs/EFFICIENT_TRAINING.md) — naive vs. fused (SDPA)

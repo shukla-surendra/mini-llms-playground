@@ -7,10 +7,11 @@ output actually sound better") is meant to be judged.
 
 Two halves:
 
-* **Prompt set** — ~130 questions across *corpus-mirroring* categories (regression
-  checks against each training source) and *capability probes* (reasoning, coding,
-  agentic planning, practical life, safety, self-knowledge). See `qa_prompts.py` for
-  why both exist, and why failure on the probes is expected rather than a bug.
+* **Prompt set** — questions loaded from `data/prompt.jsonl` across *corpus-mirroring*
+  categories (regression checks against each training source) and *capability probes*
+  (reasoning, coding, agentic planning, practical life, safety, self-knowledge). See
+  `qa_prompts.py` for the file's exact shape, why both category kinds exist, and why
+  failure on the probes is expected rather than a bug.
 * **Parameter sweep** — a few prompts re-asked under greedy/conservative/default/
   creative decoding, so you can separate what the *model* believes from what the
   *sampler* happened to roll.
@@ -34,34 +35,26 @@ from ..config import load_settings
 from ..data.sources import DATASETS
 from ..inference import generate_text
 from ..runtime import get_device
-from .qa_prompts import (PROBE_CATEGORIES, QA_CATEGORIES, SWEEP_PROMPTS,
-                         SWEEP_SETTINGS)
+from .qa_prompts import (CATEGORY_SOURCE_HF_ID, PROBE_CATEGORIES, QA_CATEGORIES,
+                         SWEEP_PROMPTS, SWEEP_SETTINGS)
 
 REPORT_TZ = ZoneInfo("Asia/Kolkata")
 
-# Categories mirroring a registered chat source are skipped when that source is absent
-# from data/raw/, so a report never claims to test a dataset this checkpoint never saw
-# (relevant for the gated LMSYS set). Capability probes and extra-document categories
-# are intentionally unmapped — they always run.
-_CATEGORY_SOURCE_HF_ID = {
-    "UltraChat-style (bulk everyday-assistant Q&A)": "HuggingFaceH4/ultrachat_200k",
-    "OASST1-style (human-phrased, sometimes messier)": "OpenAssistant/oasst1",
-    "Dolly-style (one prompt per documented task type)": "zidankhan/databricks-dolly-15k",
-    "SmolTalk-style (dialogue / reasoning / rewriting / summarization)": "HuggingFaceTB/smoltalk",
-    "No Robots-style (one prompt per documented task type, entirely human-written)":
-        "HuggingFaceH4/no_robots",
-    "GSM8K-style (grade-school math — the arithmetic-gap regression check)": "openai/gsm8k",
-}
 
 def _is_probe(category):
     return category in PROBE_CATEGORIES
 
 
 def _active_categories(data_dir):
+    # Categories mirroring a registered chat source (CATEGORY_SOURCE_HF_ID, sourced from
+    # each prompt.jsonl line's source_hf_id) are skipped when that source is absent from
+    # data/raw/, so a report never claims to test a dataset this checkpoint never saw
+    # (relevant for the gated LMSYS set). Capability probes and extra-document categories
+    # have no source_hf_id — they always run.
     sources_by_id = {ds.hf_id: ds for ds in DATASETS}
     active, skipped = [], []
     for category, questions in QA_CATEGORIES:
-        hf_id = _CATEGORY_SOURCE_HF_ID.get(category)
+        hf_id = CATEGORY_SOURCE_HF_ID.get(category)
         if hf_id is None:
             active.append((category, questions))
             continue

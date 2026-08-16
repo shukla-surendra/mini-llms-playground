@@ -25,19 +25,19 @@ EOF
 }
 
 run_data() {
-  uv run prepare_dataset.py --max-samples "$MAX_SAMPLES" --vocab-size "$VOCAB_SIZE"
+  uv run gpt-data --max-samples "$MAX_SAMPLES" --vocab-size "$VOCAB_SIZE"
 }
 
 run_train() {
-  uv run train.py
+  uv run gpt-train
 }
 
 run_infer() {
-  uv run inference.py --prompt "${PROMPT:-Once upon a time,}"
+  uv run gpt-infer --prompt "${PROMPT:-Once upon a time,}"
 }
 
 run_serve() {
-  uv run uvicorn api_server:app --host 127.0.0.1 --port 8010 --reload
+  uv run gpt-serve --host 127.0.0.1 --port 8010 --reload
 }
 
 if [[ $# -lt 1 ]]; then

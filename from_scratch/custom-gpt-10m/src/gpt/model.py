@@ -21,6 +21,21 @@ full mechanism, and checkpoint.py's remap_attn_impl for how a checkpoint trained
 one implementation resumes correctly under the other (the two paths use different
 parameter names for numerically-identical weights, so a plain load_state_dict across
 implementations fails without that remap).
+
+KV caching (generation only). `forward(x, past_kv=None, use_cache=False)` — with
+`use_cache=False` (the default), every call is a full, independent forward pass and the
+return value is unchanged (`logits`), so training's `model(window)` calls are completely
+unaffected by any of this. With `use_cache=True`, each layer's already-computed key/value
+projections for `x`'s tokens are returned alongside the output and can be passed back in
+as `past_kv` on the next call — so a 1-new-token decode step only computes that one
+token's Q/K/V and attends it against the cached K/V from every earlier step, instead of
+recomputing every earlier token's K/V from scratch (see inference/generate.py's
+generate_text(), the only caller that uses this). Only the "sdpa" path implements this:
+nn.MultiheadAttention ("naive") has no public incremental-decoding API, so that path
+always does a full recompute regardless of `use_cache` — generate_text() branches on
+`model.attn_impl` accordingly, and checkpoint.load_model() defaults inference callers to
+"sdpa" (remapping a "naive"-trained checkpoint's weights, since they're numerically
+identical either way) specifically so this fast path is what generation actually uses.
 """
 
 import torch
@@ -58,10 +73,14 @@ class CausalSelfAttention(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x):
+    def forward(self, x, past_kv=None, use_cache=False):
         batch, seq_len, _ = x.shape
 
         if self.attn_impl == "naive":
+            # No incremental-decoding API on nn.MultiheadAttention — always a full
+            # recompute over exactly the tokens in `x`, past_kv is ignored. Correct only
+            # when the caller always passes the full sequence-so-far (never a single new
+            # token expecting cache reuse) — see generate_text()'s attn_impl branch.
             causal_mask = torch.triu(
                 torch.full((seq_len, seq_len), float("-inf"), device=x.device),
                 diagonal=1,
@@ -73,7 +92,8 @@ class CausalSelfAttention(nn.Module):
                 attn_mask=causal_mask,
                 need_weights=False,
             )
-            return self.dropout(out)
+            out = self.dropout(out)
+            return (out, None) if use_cache else out
 
         # sdpa path
         qkv = self.in_proj(x)  # (batch, seq_len, 3*embed_size)
@@ -83,13 +103,24 @@ class CausalSelfAttention(nn.Module):
         k = k.view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(batch, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
+        if past_kv is not None:
+            past_k, past_v = past_kv
+            k = torch.cat([past_k, k], dim=2)
+            v = torch.cat([past_v, v], dim=2)
+
+        # is_causal is only needed to mask x's OWN tokens against each other (the
+        # multi-token prefill case, past_kv=None). Once a cache exists, every key came
+        # from a strictly earlier call than this one's queries, so nothing needs masking
+        # — sdpa with is_causal=False here still expects the same-length q/k when
+        # is_causal=True, which wouldn't even apply correctly once k is longer than q.
         out = F.scaled_dot_product_attention(
             q, k, v,
             dropout_p=self.attn_dropout_p if self.training else 0.0,
-            is_causal=True,
+            is_causal=(past_kv is None),
         )
         out = out.transpose(1, 2).contiguous().view(batch, seq_len, self.embed_size)
-        return self.dropout(self.out_proj(out))
+        out = self.dropout(self.out_proj(out))
+        return (out, (k, v)) if use_cache else out
 
 
 class MLP(nn.Module):
@@ -114,10 +145,14 @@ class GPTBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(embed_size)
         self.mlp = MLP(embed_size, dropout)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, past_kv=None, use_cache=False):
+        attn_out = self.attn(self.ln_1(x), past_kv=past_kv, use_cache=use_cache)
+        new_kv = None
+        if use_cache:
+            attn_out, new_kv = attn_out
+        x = x + attn_out
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return (x, new_kv) if use_cache else x
 
 
 class TinyGPT(nn.Module):
@@ -168,12 +203,28 @@ class TinyGPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, x):
+    def forward(self, x, past_kv=None, use_cache=False, start_pos=0):
+        """past_kv/use_cache/start_pos are the incremental-decoding API — see the class
+        docstring's "KV caching" section. `start_pos` is the absolute position of x's
+        first token in the sequence (0 for a fresh/prefill call, ids.size(1) - x.size(1)
+        for a decode step continuing an existing cache) — position embeddings must
+        reflect true position, not just x's own local offset, once x is a short
+        continuation rather than the full sequence from the start.
+        """
         _, seq_len = x.shape
-        pos = torch.arange(seq_len, device=x.device)
+        pos = torch.arange(start_pos, start_pos + seq_len, device=x.device)
         h = self.token_emb(x) + self.pos_emb(pos)
         h = self.drop(h)
-        for block in self.blocks:
-            h = block(h)
+
+        new_past_kv = [] if use_cache else None
+        for i, block in enumerate(self.blocks):
+            layer_past = past_kv[i] if past_kv is not None else None
+            out = block(h, past_kv=layer_past, use_cache=use_cache)
+            if use_cache:
+                h, kv = out
+                new_past_kv.append(kv)
+            else:
+                h = out
         h = self.ln_f(h)
-        return self.lm_head(h)
+        logits = self.lm_head(h)
+        return (logits, new_past_kv) if use_cache else logits
