@@ -57,7 +57,22 @@ layer, building directly on Part 0's general neural-network vocabulary.
 | 8 | [What Is a Language Model, Really](08_what_is_a_language_model.md) | **written** |
 | 9 | [Tokenization: Turning Text Into Numbers](09_tokenization.md) | **written** |
 | 10 | [The Transformer Architecture, Line by Line](10_transformer_architecture.md) | **written** |
-| 11 | Positional Encoding Variants, Deeper (RoPE and beyond) | planned |
+| 11 | [Positional Encoding Variants, Deeper (RoPE and beyond)](11_positional_encoding_variants_rope_and_beyond.md) | **written** |
+
+### Part 1B — Architecture Variants: What the Newer `from_scratch` Project Changed, and Why
+
+Appended after the original catalog, same reason as Part 2B/2C/3B: avoids renumbering
+already-written chapters. Belongs right after Chapter 11 in reading order — see "Reading
+order" below. `custom-gpt-153m`'s architecture (Chapters 10-11) is one valid transformer
+recipe; `custom-gpt-200m`/`350m` make four different choices (RoPE instead of learned
+position embeddings, RMSNorm instead of LayerNorm, SwiGLU instead of a GELU MLP, no
+biases). Chapter 11 already covers the first swap; this chapter covers the other two,
+comparing both architecture families side by side throughout rather than describing the
+newer one in isolation.
+
+| # | Chapter | Status |
+|---|---|---|
+| 35 | [Normalization and MLP Variants: RMSNorm vs. LayerNorm, SwiGLU vs. GELU-MLP](35_normalization_and_mlp_variants_rmsnorm_and_swiglu.md) | **written** |
 
 ### Part 2 — Pretraining: Building a Model From Zero
 
@@ -68,7 +83,7 @@ training loop, and why each piece is there.
 |---|---|---|
 | 12 | [The Pretraining Objective & Why Data Dominates](12_the_pretraining_objective_and_why_data_dominates.md) | **written** |
 | 13 | [The Training Loop, Mechanism by Mechanism](13_the_training_loop_mechanism_by_mechanism.md) | **written** |
-| 14 | Scaling Laws: Why Bigger Models, and When They Stop Helping | planned |
+| 14 | [Scaling Laws: Why Bigger Models, and When They Stop Helping](14_scaling_laws_why_bigger_models_and_when_they_stop_helping.md) | **written** |
 | 15 | [Evaluating a Model While It's Still Training](15_evaluating_a_model_while_training.md) | **written** |
 
 ### Part 2C — Data Preparation: The Practical Pipeline Behind "Data Dominates"
@@ -164,6 +179,11 @@ Part 1 (7 → 10), which is LLM-specific vocabulary built on Part 0's general on
 **If you already know standard deep learning (neurons, backprop, gradient descent) and
 want the LLM-specific material**: skip to Part 1 directly, referencing Part 0 chapters
 only if a specific term (e.g., "what exactly is a hyperparameter") needs a refresher.
+
+**If you want the full architecture picture, including the newer `from_scratch` project's
+choices**: read Part 1B (Chapter 35) right after Chapter 11, despite the higher chapter
+number — appended after the original catalog to avoid renumbering, but belongs right
+after positional encoding in reading order, before moving on to Part 2.
 
 **If you're following Part 2 (Pretraining) start to finish**: read Chapter 34 (Part 2C)
 immediately after Chapter 12, despite the higher chapter number — it's the practical

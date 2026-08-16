@@ -14,11 +14,17 @@ import torch
 import torch.nn.functional as F
 from tqdm import trange
 
-from ..checkpoint import is_compatible, load_checkpoint, make_payload
+from ..checkpoint import is_compatible, load_checkpoint, make_payload, remap_attn_impl
 from ..config import load_settings, resolve_vocab_size
 from ..model import build_model, detect_device
 
-ATTN_IMPL = os.getenv("ATTN_IMPL", "naive")
+# "sdpa" (F.scaled_dot_product_attention, fused kernels) is faster than "naive"
+# (nn.MultiheadAttention, materializes the full seq_len x seq_len mask) — a real,
+# measured ~8% throughput gain at this project's default context_length=256, growing
+# at longer contexts (see docs/EFFICIENT_TRAINING.md). Resuming a checkpoint saved
+# under a different ATTN_IMPL than this run's remaps the weights automatically (same
+# values, different parameter names) rather than crashing — see remap_attn_impl below.
+ATTN_IMPL = os.getenv("ATTN_IMPL", "sdpa")
 USE_AMP = os.getenv("AMP", "0") == "1"
 USE_GRAD_CHECKPOINT = os.getenv("GRAD_CHECKPOINT", "0") == "1"
 
@@ -130,7 +136,19 @@ def run(preset_name=None, resume=True):
     if resume and paths.latest_checkpoint.exists():
         ckpt = load_checkpoint(paths.latest_checkpoint, device)
         if is_compatible(ckpt, model_cfg):
-            model.load_state_dict(ckpt["model_state_dict"])
+            model_state_dict = ckpt["model_state_dict"]
+            checkpoint_attn_impl = ckpt.get("attn_impl", "naive")
+            if checkpoint_attn_impl != ATTN_IMPL:
+                print(
+                    f"[resume] checkpoint was trained with attn_impl={checkpoint_attn_impl!r}, "
+                    f"current run uses attn_impl={ATTN_IMPL!r} — remapping attention weights "
+                    f"(same values, different parameter names)."
+                )
+                model_state_dict = remap_attn_impl(
+                    model_state_dict, num_layers=model_cfg.num_layers,
+                    from_impl=checkpoint_attn_impl, to_impl=ATTN_IMPL,
+                )
+            model.load_state_dict(model_state_dict)
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             start_step = ckpt.get("step", -1) + 1
             best_val_loss = ckpt.get("best_val_loss", best_val_loss)
@@ -146,7 +164,11 @@ def run(preset_name=None, resume=True):
     latest_eval = None
 
     def payload(step, best):
-        extra = {"processed_tokens": processed_tokens, "tokenizer_path": str(paths.tokenizer_json)}
+        extra = {
+            "processed_tokens": processed_tokens,
+            "tokenizer_path": str(paths.tokenizer_json),
+            "attn_impl": ATTN_IMPL,
+        }
         return make_payload(model, optimizer, step, best, model_cfg, extra_fields=extra)
 
     try:

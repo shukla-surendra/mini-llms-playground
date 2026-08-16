@@ -62,7 +62,7 @@ The API is the same either way; what runs underneath depends on hardware.
 
 ## Grounded in This Repo's Code
 
-[`from_scratch/tinystories-gpt-6m/model.py`](../../from_scratch/tinystories-gpt-6m/model.py)'s
+[`from_scratch/custom-gpt-6m/src/gpt/model.py`](../../from_scratch/custom-gpt-6m/src/gpt/model.py)'s
 `CausalSelfAttention` implements both the naive path and the SDPA path side by side, so the
 same class can be run either way via `attn_impl`:
 
@@ -78,7 +78,7 @@ out = F.scaled_dot_product_attention(
 `torch.triu(..., float("-inf"))` matrix the naive path constructs — the causal constraint
 is applied *inside* the fused kernel, block by block, rather than as a separate
 materialized tensor added to the scores beforehand. See
-[`docs/EFFICIENT_TRAINING.md`](../../from_scratch/tinystories-gpt-6m/docs/EFFICIENT_TRAINING.md)
+[`docs/EFFICIENT_TRAINING.md`](../../from_scratch/custom-gpt-6m/docs/EFFICIENT_TRAINING.md)
 for the real, measured throughput difference this makes on this project's own hardware —
 and for why the difference is modest at this project's short `context_length=256`
 specifically (the quadratic-memory problem this chapter describes gets *worse* at longer

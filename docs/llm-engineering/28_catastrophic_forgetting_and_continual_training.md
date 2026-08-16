@@ -124,13 +124,13 @@ seeing per-dataset results without paying the sequential-forgetting cost: train 
 shuffled union, but keep separate validation sets per source and log loss against each
 independently — a small change to the eval loop that runs the eval helper once per
 held-out split instead of one combined split.
-[`from_scratch/tinystories-gpt-6m/docs/CONTINUING_TRAINING_ON_NEW_DATA.md`](../../from_scratch/tinystories-gpt-6m/docs/CONTINUING_TRAINING_ON_NEW_DATA.md)
+[`from_scratch/custom-gpt-6m/docs/CONTINUING_TRAINING_ON_NEW_DATA.md`](../../from_scratch/custom-gpt-6m/docs/CONTINUING_TRAINING_ON_NEW_DATA.md)
 implements the tokenizer-mismatch fix as `prepare_dataset.py --reuse-tokenizer`, and shows
 forgetting being *measured*, not just discussed — keeping the original dataset's `val.bin`
 around and periodically evaluating a continuation run against it, so whether (and how
 much) forgetting is happening becomes a number you can watch rather than a theoretical
 worry.
-[`from_scratch/tinystories-gpt-6m/docs/CONTINUAL_TRAINING_LOW_RESOURCE.md`](../../from_scratch/tinystories-gpt-6m/docs/CONTINUAL_TRAINING_LOW_RESOURCE.md)
+[`from_scratch/custom-gpt-6m/docs/CONTINUAL_TRAINING_LOW_RESOURCE.md`](../../from_scratch/custom-gpt-6m/docs/CONTINUAL_TRAINING_LOW_RESOURCE.md)
 extends replay to *many* sequential rounds with `scripts/build_replay_mix.py` (sampling
 from every prior round's already-tokenized data, not just the last one) plus reversible
 checkpoint snapshots (`make snapshot`/`make restore-snapshot`) so a bad round can be

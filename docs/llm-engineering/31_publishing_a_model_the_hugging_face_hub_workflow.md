@@ -60,7 +60,7 @@ whatever was most recently uploaded to it.
 
 ## Grounded in This Repo's Code
 
-[`from_scratch/tinystories-gpt-6m/scripts/upload_to_hf.py`](../../from_scratch/tinystories-gpt-6m/scripts/upload_to_hf.py)
+[`from_scratch/custom-gpt-6m/scripts/upload_to_hf.py`](../../from_scratch/custom-gpt-6m/scripts/upload_to_hf.py)
 uploads exactly the raw-files set the reasoning above requires — the checkpoint,
 `tokenizer.json` (this project's own custom-trained BPE vocabulary, per
 [Chapter 9](09_tokenization.md)), the `model.py` class definition, `inference.py`'s
@@ -72,7 +72,7 @@ generated inline by the script. The equivalent script in
 follows the identical pattern, minus a tokenizer file — that project reuses GPT-2's public
 tokenizer as-is rather than training its own, so there's no project-specific tokenizer
 file to publish.
-[`from_scratch/tinystories-gpt-6m/docs/PUBLISHING_TO_HUGGING_FACE.md`](../../from_scratch/tinystories-gpt-6m/docs/PUBLISHING_TO_HUGGING_FACE.md)
+[`from_scratch/custom-gpt-6m/docs/PUBLISHING_TO_HUGGING_FACE.md`](../../from_scratch/custom-gpt-6m/docs/PUBLISHING_TO_HUGGING_FACE.md)
 covers this project's exact file list, token setup, and verification steps.
 
 ## Deep-Dive: Why the Model Card's Self-Containment Requirement Is Stricter Than It Looks

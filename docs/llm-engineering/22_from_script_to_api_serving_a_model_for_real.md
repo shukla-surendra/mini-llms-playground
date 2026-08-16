@@ -66,7 +66,7 @@ is solving a problem you don't have yet.
 
 ## Grounded in This Repo's Code
 
-[`from_scratch/tinystories-gpt-6m/api_server.py`](../../from_scratch/tinystories-gpt-6m/api_server.py)
+[`from_scratch/custom-gpt-6m/src/gpt/inference/server.py`](../../from_scratch/custom-gpt-6m/src/gpt/inference/server.py)
 is the minimal wrapper described above, almost line for line:
 
 ```python

@@ -26,7 +26,7 @@ train_samples_per_second: 3.15
 train_steps_per_second: 0.197
 ```
 
-Slower per-step than [`../../../from_scratch/tinystories-gpt-6m/`](../../../from_scratch/tinystories-gpt-6m/)'s
+Slower per-step than [`../../../from_scratch/custom-gpt-6m/`](../../../from_scratch/custom-gpt-6m/)'s
 training (~5-6 steps/sec there) — expected and consistent with
 [Chapter 16](../../../docs/llm-engineering/16_fine_tuning_landscape.md)'s reasoning:
 even with only 3.5% of parameters trainable, every forward/backward pass still runs
@@ -58,10 +58,10 @@ step (epoch)    loss
 
 ## An honest limitation of this run's measurement, worth naming directly
 
-Unlike [`../../../from_scratch/tinystories-gpt-6m/`](../../../from_scratch/tinystories-gpt-6m/)'s
+Unlike [`../../../from_scratch/custom-gpt-6m/`](../../../from_scratch/custom-gpt-6m/)'s
 training loop (which computes a separate, smoothed `val_loss` on held-out data every
 `eval_interval` steps — see
-[`../../../from_scratch/tinystories-gpt-6m/docs/READING_TRAINING_OUTPUT.md`](../../../from_scratch/tinystories-gpt-6m/docs/READING_TRAINING_OUTPUT.md#train-2395-and-val-2465--the-smoothed-periodic-evaluation-losses)),
+[`../../../from_scratch/custom-gpt-6m/docs/READING_TRAINING_OUTPUT.md`](../../../from_scratch/custom-gpt-6m/docs/READING_TRAINING_OUTPUT.md#train-2395-and-val-2465--the-smoothed-periodic-evaluation-losses)),
 `train_lora.py` (like the sibling
 [`../../tinyllama-1.1b-lora/train_tinyllama_lora.py`](../../tinyllama-1.1b-lora/train_tinyllama_lora.py)
 it's modeled on) only logs raw, per-batch training loss — no held-out validation set was

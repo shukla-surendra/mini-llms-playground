@@ -98,7 +98,7 @@ and greedy-leaning decoding, orthogonal to both temperature and truncation.
 
 ## Grounded in This Repo's Code
 
-[`from_scratch/tinystories-gpt-6m/inference.py`](../../from_scratch/tinystories-gpt-6m/inference.py)'s
+[`from_scratch/custom-gpt-6m/src/gpt/inference/generate.py`](../../from_scratch/custom-gpt-6m/src/gpt/inference/generate.py)'s
 `sample_next_token` implements temperature, top-k, and top-p in exactly the order
 described above:
 
@@ -118,9 +118,9 @@ step of generation after it, recomputed identically each time, because nothing f
 previous step's attention computation is reused. At this repo's scale (a context length
 of 256, generations of a few hundred tokens, one request at a time on a laptop CPU/MPS
 device) that recomputation is cheap enough to not matter — see
-[`from_scratch/tinystories-gpt-6m/docs/SERVING.md`](../../from_scratch/tinystories-gpt-6m/docs/SERVING.md)
+[`from_scratch/custom-gpt-6m/docs/SERVING.md`](../../from_scratch/custom-gpt-6m/docs/SERVING.md)
 for why this project's serving setup is a legitimate choice at this scale, not a shortcut.
-[`from_scratch/tinystories-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md`](../../from_scratch/tinystories-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md)
+[`from_scratch/custom-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md`](../../from_scratch/custom-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md)
 and each `custom-gpt` project's [`docs/API_SERVER.md`](../../from_scratch/custom-gpt-153m/docs/API_SERVER.md)
 cover this project's own default values and request-field specifics.
 
@@ -147,7 +147,7 @@ is a memory-access optimization, not a mathematical one.
 
 This repo's own `generate()` doesn't implement one — a deliberate, honest scope choice at
 this model's size, not an oversight (see "What's out of scope" in
-[`SERVING.md`](../../from_scratch/tinystories-gpt-6m/docs/SERVING.md)). The
+[`SERVING.md`](../../from_scratch/custom-gpt-6m/docs/SERVING.md)). The
 `platform-lab` repo's `gpu_infrastructure`/serving chapters, which this curriculum's
 Part 4 hands off to for production-scale serving, cover KV cache memory budgeting under
 real concurrent request load, where it stops being optional.

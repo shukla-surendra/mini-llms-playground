@@ -19,12 +19,13 @@ import torch
 import torch.nn.functional as F
 from tqdm import trange
 
-from ..checkpoint import is_compatible, load_checkpoint, make_payload
+from ..checkpoint import is_compatible, load_checkpoint, make_payload, remap_attn_impl
 from ..config import load_settings, resolve_mlm_config, resolve_vocab_size
 from ..model import detect_device
 from ..model_mlm import apply_bert_masking, build_mlm_model
 
-ATTN_IMPL = os.getenv("ATTN_IMPL", "naive")
+# See trainer.py's matching comment — "sdpa" is the faster, measured default.
+ATTN_IMPL = os.getenv("ATTN_IMPL", "sdpa")
 
 
 def load_meta(paths):
@@ -115,7 +116,19 @@ def run(preset_name=None, resume=True):
     if resume and paths.latest_checkpoint.exists():
         ckpt = load_checkpoint(paths.latest_checkpoint, device)
         if is_compatible(ckpt, model_cfg, extra_check_fields={"mask_prob": mlm_cfg.mask_prob}):
-            model.load_state_dict(ckpt["model_state_dict"])
+            model_state_dict = ckpt["model_state_dict"]
+            checkpoint_attn_impl = ckpt.get("attn_impl", "naive")
+            if checkpoint_attn_impl != ATTN_IMPL:
+                print(
+                    f"[resume] checkpoint was trained with attn_impl={checkpoint_attn_impl!r}, "
+                    f"current run uses attn_impl={ATTN_IMPL!r} — remapping attention weights "
+                    f"(same values, different parameter names)."
+                )
+                model_state_dict = remap_attn_impl(
+                    model_state_dict, num_layers=model_cfg.num_layers,
+                    from_impl=checkpoint_attn_impl, to_impl=ATTN_IMPL,
+                )
+            model.load_state_dict(model_state_dict)
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
             start_step = ckpt.get("step", -1) + 1
             best_val_loss = ckpt.get("best_val_loss", best_val_loss)
@@ -130,7 +143,11 @@ def run(preset_name=None, resume=True):
     latest_eval = None
 
     def payload(step, best):
-        extra = {"mask_prob": mlm_cfg.mask_prob, "tokenizer_path": str(paths.tokenizer_json)}
+        extra = {
+            "mask_prob": mlm_cfg.mask_prob,
+            "tokenizer_path": str(paths.tokenizer_json),
+            "attn_impl": ATTN_IMPL,
+        }
         return make_payload(model, optimizer, step, best, model_cfg, extra_fields=extra)
 
     try:

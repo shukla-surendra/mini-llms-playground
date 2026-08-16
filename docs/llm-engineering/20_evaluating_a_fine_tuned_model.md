@@ -80,7 +80,7 @@ A few real, easy-to-get-wrong details matter for a comparison to actually be mea
 - **Same prompts, same decoding settings, for both models** — comparing the original
   model at `temperature=1.0` against the fine-tuned model at `temperature=0.7` conflates
   the fine-tuning's effect with a decoding-setting difference
-  ([`../../from_scratch/tinystories-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md`](../../from_scratch/tinystories-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md)),
+  ([`../../from_scratch/custom-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md`](../../from_scratch/custom-gpt-6m/docs/TEMPERATURE_AND_SAMPLING.md)),
   making the comparison uninterpretable.
 - **Prompts the fine-tuning data didn't directly contain** — evaluating only on prompts
   taken verbatim from the training set risks mistaking memorization for genuine

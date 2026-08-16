@@ -34,7 +34,7 @@ don't use.
 **No weight tying, unlike this repo's own from-scratch models**: `tie_word_embeddings:
 false` — the input embedding and output (`lm_head`) matrices are **separate**, not the
 same tensor. Contrast with
-[`../../from_scratch/tinystories-gpt-6m/model.py`](../../from_scratch/tinystories-gpt-6m/model.py)'s
+[`../../from_scratch/custom-gpt-6m/src/gpt/model.py`](../../from_scratch/custom-gpt-6m/src/gpt/model.py)'s
 explicit `self.lm_head.weight = self.token_emb.weight` (per
 [Chapter 10](../../../docs/llm-engineering/10_transformer_architecture.md#weight-tying-one-clever-parameter-saving-trick)).
 At TinyLlama's scale (1.1B parameters, 32,000-token vocabulary), the original authors

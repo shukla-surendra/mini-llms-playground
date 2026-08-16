@@ -94,7 +94,7 @@ and `make_payload` is the three-category structure above, made concrete — lear
 Every from-scratch project in this repo follows the same shape:
 [`custom-gpt-153m`](../../from_scratch/custom-gpt-153m/) writes the identical fields to
 `tiny_llm_checkpoint*.pt`, and
-[`tinystories-gpt-6m`](../../from_scratch/tinystories-gpt-6m/)'s `train.py` does the same
+[`custom-gpt-6m`](../../from_scratch/custom-gpt-6m/)'s `train.py` does the same
 into `tinystories_gpt_checkpoint*.pt`. Cross-device resume is
 [`from_scratch/custom-gpt-10m/docs/MIGRATION.md`](../../from_scratch/custom-gpt-10m/docs/MIGRATION.md)'s
 whole subject — copying `checkpoints/<label>/latest.pt` between a cloud GPU host and a

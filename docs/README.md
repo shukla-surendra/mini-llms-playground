@@ -37,7 +37,7 @@ The same code as `custom-gpt-153m` (architecture, GPT-2 tokenizer/vocab, trainin
 only `context_length`/`embed_size`/`num_heads`/`num_layers` shrunk to a ~10M-parameter
 config, so the whole pipeline trains and iterates fast on a laptop CPU/MPS. The goal is
 proving the mechanics (data prep → train → infer → eval → serve), not output quality —
-see `tinystories-gpt-6m` below for the sibling project that optimizes for quality at a
+see `custom-gpt-6m` below for the sibling project that optimizes for quality at a
 similar scale instead. Environment managed by `uv`; every workflow step has a `make`
 target.
 
@@ -50,7 +50,7 @@ target.
 | [`docs/API_SERVER.md`](../from_scratch/custom-gpt-10m/docs/API_SERVER.md) | Running and calling the FastAPI serving endpoint (mechanism: [Chapter 22](llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)) |
 | [`docs/MIGRATION.md`](../from_scratch/custom-gpt-10m/docs/MIGRATION.md) | Moving a training run between a cloud GPU machine and a local Mac (mechanism: [Chapter 27](llm-engineering/27_checkpointing_and_resuming_training.md)) |
 
-### [`tinystories-gpt-6m`](../from_scratch/tinystories-gpt-6m/)
+### [`custom-gpt-6m`](../from_scratch/custom-gpt-6m/)
 
 A ~5.85M-parameter model trained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories)
 (a dataset built with a deliberately restricted vocabulary) — the goal is the opposite
@@ -59,11 +59,11 @@ Apple Silicon MPS) and genuinely coherent output, not maximal scale.
 
 | Doc | Covers |
 |---|---|
-| [`README.md`](../from_scratch/tinystories-gpt-6m/README.md) | Quickstart, real training results and generated output from this project's own run |
-| [`docs/DATASET_AND_TOKENIZER.md`](../from_scratch/tinystories-gpt-6m/docs/DATASET_AND_TOKENIZER.md) | Why TinyStories, why a custom small vocabulary instead of GPT-2's |
-| [`docs/ARCHITECTURE.md`](../from_scratch/tinystories-gpt-6m/docs/ARCHITECTURE.md) | Every sizing decision, full parameter-count derivation |
-| [`docs/TRAINING.md`](../from_scratch/tinystories-gpt-6m/docs/TRAINING.md) | Hyperparameters, real MPS throughput, resume, diagnosing a bad run |
-| [`docs/SERVING.md`](../from_scratch/tinystories-gpt-6m/docs/SERVING.md) | Inference and API server, what's deliberately out of scope at this size (mechanism: [Chapters 21](llm-engineering/21_inference_mechanics_decoding_sampling_and_kv_cache.md)-[22](llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)) |
+| [`README.md`](../from_scratch/custom-gpt-6m/README.md) | Quickstart, real training results and generated output from this project's own run |
+| [`docs/DATASET_AND_TOKENIZER.md`](../from_scratch/custom-gpt-6m/docs/DATASET_AND_TOKENIZER.md) | Why TinyStories, why a custom small vocabulary instead of GPT-2's |
+| [`docs/ARCHITECTURE.md`](../from_scratch/custom-gpt-6m/docs/ARCHITECTURE.md) | Every sizing decision, full parameter-count derivation |
+| [`docs/TRAINING.md`](../from_scratch/custom-gpt-6m/docs/TRAINING.md) | Hyperparameters, real MPS throughput, resume, diagnosing a bad run |
+| [`docs/SERVING.md`](../from_scratch/custom-gpt-6m/docs/SERVING.md) | Inference and API server, what's deliberately out of scope at this size (mechanism: [Chapters 21](llm-engineering/21_inference_mechanics_decoding_sampling_and_kv_cache.md)-[22](llm-engineering/22_from_script_to_api_serving_a_model_for_real.md)) |
 
 ## Fine-tuning track
 

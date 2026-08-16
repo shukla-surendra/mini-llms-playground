@@ -87,7 +87,7 @@ The key discovery across GPT-1 (2018) → GPT-2 (2019) → GPT-3 (2020) wasn't a
 architecture each time — it was that the *same* architecture, given more parameters, more
 data, and more compute, kept getting better in a surprisingly predictable way. This
 observation became formalized as **scaling laws** (covered in depth in
-[Chapter 14](14_scaling_laws_and_model_sizing.md)) — a genuinely important discovery in its
+[Chapter 14](14_scaling_laws_why_bigger_models_and_when_they_stop_helping.md)) — a genuinely important discovery in its
 own right, not just an engineering footnote.
 
 ### Generation 6: From "predicts text" to "follows instructions" (2022-present)
@@ -182,6 +182,6 @@ was solving:
   encoder-decoder design, trained purely on next-token prediction — the GPT lineage's
   choice, and the architecture this repo's `tiny_llm.py` implements.
 - **Scaling laws**: the empirical, predictable relationship between model size, data,
-  compute, and resulting performance — see [Chapter 14](14_scaling_laws_and_model_sizing.md).
+  compute, and resulting performance — see [Chapter 14](14_scaling_laws_why_bigger_models_and_when_they_stop_helping.md).
 - **Instruction tuning / RLHF / DPO**: post-pretraining stages that shape a model toward
   following instructions and conversing usefully — see [Part 3](00_roadmap.md#part-3--fine-tuning-adapting-an-existing-model).

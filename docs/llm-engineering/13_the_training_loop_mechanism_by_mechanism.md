@@ -4,7 +4,7 @@ Part of the [LLM Engineering Curriculum](00_roadmap.md), Part 2 — Pretraining:
 Model From Zero. Builds on [Chapter 3](03_how_neural_networks_learn.md)'s four-step loop
 (forward → loss → backward → gradient descent) and [Chapter 4](04_hyperparameter_tuning.md)'s
 hyperparameter vocabulary. Grounded primarily in
-[`from_scratch/tinystories-gpt-6m/train.py`](../../from_scratch/tinystories-gpt-6m/train.py),
+[`from_scratch/custom-gpt-6m/src/gpt/training/trainer.py`](../../from_scratch/custom-gpt-6m/src/gpt/training/trainer.py),
 since it's the sibling project's simpler loop
 ([`custom-gpt-153m/tiny_llm.py`](../../from_scratch/custom-gpt-153m/tiny_llm.py)) with a
 few extra mechanisms layered on that a real training loop needs once model or batch size
@@ -24,7 +24,7 @@ memory when memory is the real constraint.
 ### The loop, one mechanism at a time
 
 Every training step in
-[`train.py`](../../from_scratch/tinystories-gpt-6m/train.py)'s `main()` does these things,
+[`train.py`](../../from_scratch/custom-gpt-6m/src/gpt/training/trainer.py)'s `main()` does these things,
 in this order:
 
 1. **Sample a batch** — `get_batch` picks `batch_size` random starting positions in the
@@ -79,7 +79,7 @@ fp32:
   so no scaler is needed — at the cost of coarser precision within that range.
 
 The *speedup* from either is hardware-dependent, not a property of the dtype alone — see
-[`from_scratch/tinystories-gpt-6m/docs/EFFICIENT_TRAINING.md`](../../from_scratch/tinystories-gpt-6m/docs/EFFICIENT_TRAINING.md)
+[`from_scratch/custom-gpt-6m/docs/EFFICIENT_TRAINING.md`](../../from_scratch/custom-gpt-6m/docs/EFFICIENT_TRAINING.md)
 for real, measured numbers showing this concretely (a real speedup on the hardware that
 has dedicated low-precision matmul units, near-zero benefit on hardware that doesn't).
 
@@ -96,7 +96,7 @@ only the checkpointed inputs, not every intermediate tensor, need to stay reside
 
 All three mechanisms above (gradient accumulation was already present; autocast/scaler and
 gradient checkpointing are additions) are real, runnable flags in
-[`train.py`](../../from_scratch/tinystories-gpt-6m/train.py):
+[`train.py`](../../from_scratch/custom-gpt-6m/src/gpt/training/trainer.py):
 
 ```python
 amp_dtype = {"cuda": torch.float16, "mps": torch.bfloat16, "cpu": torch.bfloat16}[device]
@@ -110,7 +110,7 @@ with torch.autocast(device_type=device, dtype=amp_dtype, enabled=amp_enabled):
 scaler.scale(loss / grad_accum_steps).backward()
 ```
 
-and in [`model.py`](../../from_scratch/tinystories-gpt-6m/model.py)'s
+and in [`model.py`](../../from_scratch/custom-gpt-6m/src/gpt/model.py)'s
 `TinyStoriesGPT.forward`:
 
 ```python
@@ -121,7 +121,7 @@ else:
 ```
 
 Run any combination yourself: `ATTN_IMPL=sdpa AMP=1 GRAD_CHECKPOINT=1 make train` (see
-[`EFFICIENT_TRAINING.md`](../../from_scratch/tinystories-gpt-6m/docs/EFFICIENT_TRAINING.md)
+[`EFFICIENT_TRAINING.md`](../../from_scratch/custom-gpt-6m/docs/EFFICIENT_TRAINING.md)
 for what each combination actually measured on this project's own hardware).
 
 ## Deep-Dive: Why Gradient Checkpointing and Gradient Accumulation Solve Different Problems

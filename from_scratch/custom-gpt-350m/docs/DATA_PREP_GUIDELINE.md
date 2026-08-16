@@ -5,8 +5,8 @@ mechanics on a broad, 5-source general-chat corpus — see the top-level
 [`README.md`](../README.md)) toward a **domain-specialized** model: same ~10M-parameter
 budget, aimed at being genuinely good within one narrow domain instead of mediocre
 across a broad one — the same trade-off
-[`tinystories-gpt-6m`](../../tinystories-gpt-6m/) already demonstrates working at this
-scale (see that project's [`README.md`](../../tinystories-gpt-6m/README.md#why-this-is-a-different-project-from-custom-gpt-153m-not-a-smaller-copy-of-it)
+[`custom-gpt-6m`](../../custom-gpt-6m/) already demonstrates working at this
+scale (see that project's [`README.md`](../../custom-gpt-6m/README.md#why-this-is-a-different-project-from-custom-gpt-153m-not-a-smaller-copy-of-it)
 comparison table).
 
 Ranked by actual leverage, not by pipeline order — get the top items right before
@@ -43,7 +43,7 @@ The single highest-leverage change available. This project's own numbers already
 why: at the `10m` preset, `token_embedding` accounts for **8,041,120 of 9,979,040 total
 parameters — 80.6%** (`make config`'s breakdown), sized for GPT-2's full 50,257-token
 general-English vocabulary. A domain-fit custom BPE vocabulary — the same approach
-[`tinystories-gpt-6m`](../../tinystories-gpt-6m/docs/DATASET_AND_TOKENIZER.md) uses —
+[`custom-gpt-6m`](../../custom-gpt-6m/docs/DATASET_AND_TOKENIZER.md) uses —
 frees most of that budget for actual reasoning capacity instead of an oversized lookup
 table for tokens the domain will barely use.
 
@@ -61,7 +61,7 @@ underlying mechanism.
 ## 4. A strong document-boundary token, from the start
 
 Reserve a real special token in the tokenizer's own vocabulary (train it in from the
-start, the way `tinystories-gpt-6m` does with `<|endoftext|>`) rather than retrofitting
+start, the way `custom-gpt-6m` does with `<|endoftext|>`) rather than retrofitting
 one later. This project's current general-chat corpus uses a plain `"\n\n"` separator
 between conversations — a documented, currently-unfixed weak spot (see
 [`TRAINING_QA.md`](TRAINING_QA.md#does-arranging-data-in-a-particular-way-increase-model-performance))

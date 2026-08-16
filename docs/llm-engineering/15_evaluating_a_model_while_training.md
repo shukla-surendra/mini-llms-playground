@@ -86,7 +86,7 @@ Every from-scratch project here tracks "best" separately from "latest," specific
 temporarily-worse evaluation never contaminates what gets served:
 
 ```python
-# from_scratch/tinystories-gpt-6m/train.py
+# from_scratch/custom-gpt-6m/src/gpt/training/trainer.py
 improved = losses["val"] < best_val_loss
 if improved:
     best_val_loss = losses["val"]
@@ -99,7 +99,7 @@ the same data: `val_loss` dropped 8.368 → 3.160 → 2.728 → 2.571 → 2.465 
 0/1000/2000/3000/4000 (a textbook diminishing-returns curve — signal 1), while two
 individual evaluations inside that same run (steps 4,250 and 4,750) briefly ticked *up*
 before the run's final step landed on a new best (signal 2: noise, not a trend). See
-[`from_scratch/tinystories-gpt-6m/docs/HOW_MUCH_TRAINING_IS_ENOUGH.md`](../../from_scratch/tinystories-gpt-6m/docs/HOW_MUCH_TRAINING_IS_ENOUGH.md)
+[`from_scratch/custom-gpt-6m/docs/HOW_MUCH_TRAINING_IS_ENOUGH.md`](../../from_scratch/custom-gpt-6m/docs/HOW_MUCH_TRAINING_IS_ENOUGH.md)
 for this run's complete evaluation table and per-window arithmetic, and
 [`from_scratch/custom-gpt-10m/docs/LLM_DEV_GUIDE.md`](../../from_scratch/custom-gpt-10m/docs/LLM_DEV_GUIDE.md)
 for the same `best`/`latest` split applied to the `custom-gpt` project's checkpoint

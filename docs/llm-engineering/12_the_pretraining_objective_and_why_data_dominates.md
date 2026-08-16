@@ -5,7 +5,7 @@ Model From Zero. Builds on [Chapter 10](10_transformer_architecture.md)'s archit
 [Chapter 3](03_how_neural_networks_learn.md)'s training loop — this chapter is about *what
 task* the network is trained to solve, which turns out to be a genuinely separate design
 decision from the architecture itself. Grounded in three real, working implementations in
-[`from_scratch/tinystories-gpt-6m/`](../../from_scratch/tinystories-gpt-6m/): causal LM
+[`from_scratch/custom-gpt-6m/`](../../from_scratch/custom-gpt-6m/): causal LM
 (`model.py`/`train.py`), masked LM (`model_mlm.py`/`train_mlm.py`), and contrastive
 learning (`model_contrastive.py`/`train_contrastive.py`).
 
@@ -37,7 +37,7 @@ Predict token `t+1` from tokens `0..t`, one token at a time, left to right. Requ
 becomes trivially easy (copy the answer that's already visible) and the model learns
 nothing useful. This is what GPT-family models train on, and it's the objective this
 project's main `model.py`/`train.py` implements — see
-[`../../from_scratch/tinystories-gpt-6m/docs/TRAINING.md`](../../from_scratch/tinystories-gpt-6m/docs/TRAINING.md)
+[`../../from_scratch/custom-gpt-6m/docs/TRAINING.md`](../../from_scratch/custom-gpt-6m/docs/TRAINING.md)
 for real training numbers. Its natural strength: the objective *is* the deployment task for
 a generative model — a model trained to predict the next token is, by construction, already
 doing the thing you want at inference time (autoregressive generation).
@@ -50,7 +50,7 @@ after. This requires an architecture change, not just a loss-function change: bi
 attention would make causal LM's task trivial (as noted above), and causal attention would
 make masked LM's task impossible for right-context information. This project's
 `model_mlm.py` implements this — see
-[`../../from_scratch/tinystories-gpt-6m/docs/MASKED_LM.md`](../../from_scratch/tinystories-gpt-6m/docs/MASKED_LM.md)
+[`../../from_scratch/custom-gpt-6m/docs/MASKED_LM.md`](../../from_scratch/custom-gpt-6m/docs/MASKED_LM.md)
 for the exact 80/10/10 masking policy and real training numbers. Its natural strength:
 every position gets to use full-sentence context, which tends to produce strong
 *representations* for understanding tasks (classification, retrieval) — at the cost of not
@@ -66,7 +66,7 @@ can come from many places: data augmentation (cropping/rotating an image, back-t
 a sentence), or — the technique this project's `model_contrastive.py` uses (SimCSE, Gao et
 al. 2021) — simply passing the *same* input through the same model twice, letting dropout's
 randomness be the only difference between the two passes. See
-[`../../from_scratch/tinystories-gpt-6m/docs/CONTRASTIVE_LEARNING.md`](../../from_scratch/tinystories-gpt-6m/docs/CONTRASTIVE_LEARNING.md)
+[`../../from_scratch/custom-gpt-6m/docs/CONTRASTIVE_LEARNING.md`](../../from_scratch/custom-gpt-6m/docs/CONTRASTIVE_LEARNING.md)
 for the InfoNCE loss mechanics and real numbers. Its natural strength: directly optimizes
 for a similarity-embedding space, which is exactly what retrieval, search, and
 clustering-style production use cases need — closer to the actual downstream task than
@@ -88,7 +88,7 @@ model-size side of the same argument.
 ## Grounded in This Repo's Code
 
 All three objectives train on **the exact same tokenized data and tokenizer**
-(`from_scratch/tinystories-gpt-6m/data/`, prepared once by `prepare_dataset.py`) — a
+(`from_scratch/custom-gpt-6m/data/`, prepared once by `prepare_dataset.py`) — a
 deliberate design choice in this project specifically so the *only* variable across the
 three training runs is the objective itself, not the underlying data:
 

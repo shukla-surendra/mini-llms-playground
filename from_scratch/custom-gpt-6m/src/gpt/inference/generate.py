@@ -66,6 +66,13 @@ def load_model_and_tokenizer(checkpoint_path, device):
         embed_size=ckpt["embed_size"],
         num_heads=ckpt["num_heads"],
         num_layers=ckpt["num_layers"],
+        # Must match what the checkpoint was actually trained under — "naive" and
+        # "sdpa" hold numerically-identical weights under different parameter names
+        # (see checkpoint.remap_attn_impl), so building under the wrong one here would
+        # make load_state_dict fail on every sdpa-trained checkpoint (this defaulted to
+        # a hardcoded "naive" before, which happened to work only because no sdpa
+        # checkpoint had been loaded through this path yet).
+        attn_impl=ckpt.get("attn_impl", "naive"),
         dropout=0.0,  # no dropout at inference time
     ).to(device)
     model.load_state_dict(ckpt["model_state_dict"])

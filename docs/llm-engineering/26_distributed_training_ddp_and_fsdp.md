@@ -66,12 +66,12 @@ than another.
 
 ## Grounded in This Repo's Code
 
-[`from_scratch/tinystories-gpt-6m/train_ddp.py`](../../from_scratch/tinystories-gpt-6m/train_ddp.py)
+[`from_scratch/custom-gpt-6m/src/gpt/training/trainer_ddp.py`](../../from_scratch/custom-gpt-6m/src/gpt/training/trainer_ddp.py)
 and
-[`train_fsdp.py`](../../from_scratch/tinystories-gpt-6m/train_fsdp.py)
+[`train_fsdp.py`](../../from_scratch/custom-gpt-6m/src/gpt/training/trainer_fsdp.py)
 implement both strategies on the exact same model and data this project's `train.py`
 already trains — see
-[`docs/DISTRIBUTED_TRAINING.md`](../../from_scratch/tinystories-gpt-6m/docs/DISTRIBUTED_TRAINING.md)
+[`docs/DISTRIBUTED_TRAINING.md`](../../from_scratch/custom-gpt-6m/docs/DISTRIBUTED_TRAINING.md)
 for two real, concrete pieces of evidence that the mechanisms are actually doing what they
 claim: a genuine `NotImplementedError`/`AttributeError` this project hit trying to run
 `torchrun` and (separately) plain `FSDP(model)` on this specific hardware, and a real

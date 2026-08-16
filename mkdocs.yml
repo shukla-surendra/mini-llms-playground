@@ -1,0 +1,39 @@
+site_name: Mini LLMs Playground
+site_description: From-scratch GPT pretraining, fine-tuning, and the LLM Engineering Curriculum — rendered with instant search.
+docs_dir: docs
+
+theme:
+  name: material
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.indexes
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+    - toc.follow
+    - content.code.copy
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - tables
+  - admonition
