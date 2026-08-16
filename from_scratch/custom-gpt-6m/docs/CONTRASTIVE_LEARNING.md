@@ -2,7 +2,7 @@
 
 ## The mechanism, if you need a refresher
 
-`model_contrastive.py` and `train_contrastive.py` implement a third pretraining objective
+`src/gpt/model_contrastive.py` and `src/gpt/training/trainer_contrastive.py` (`gpt-train-contrastive`) implement a third pretraining objective
 on this project's data — contrastive self-supervised learning, in the SimCSE (Gao et al.,
 2021) style. If the concept itself (what a positive/negative pair is, why in-batch
 negatives work, what InfoNCE actually computes) is unfamiliar, the first-principles
@@ -14,7 +14,7 @@ numbers.
 ## Why this needed no new backbone architecture at all
 
 Unlike masked LM (which needed bidirectional attention — see
-[`MASKED_LM.md`](MASKED_LM.md)), the contrastive objective reuses `model.py`'s
+[`MASKED_LM.md`](MASKED_LM.md)), the contrastive objective reuses `src/gpt/model.py`'s
 `TinyStoriesGPT` **completely unchanged** as an encoder. Two additions sit on top of it,
 in `model_contrastive.py`:
 
@@ -58,8 +58,8 @@ symmetric formulation (also used by CLIP), not specific to text.
 
 ## Real training run, actually executed on this project's own MacBook (MPS)
 
-`STEPS=600`, default `BATCH_SIZE=32` (so 31 in-batch negatives per anchor),
-`TEMPERATURE=0.05`, same tokenized data as the other two objectives:
+`GPT_STEPS=600`, default `GPT_BATCH_SIZE=32` (so 31 in-batch negatives per anchor),
+`GPT_TEMPERATURE=0.05`, same tokenized data as the other two objectives:
 
 ```
 [model] 5,951,872 parameters
