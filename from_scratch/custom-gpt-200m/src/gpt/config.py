@@ -4,8 +4,8 @@ Model size is fully data-driven — pick a named preset or override individual f
 and everything downstream (parameter count, checkpoint location, the model itself)
 follows automatically. Nothing else in the package hardcodes a dimension.
 
-    GPT_PRESET=30m gpt-train          # train a ~30M model instead of the ~153M default
-    GPT_EMBED_SIZE=192 gpt-train      # or override one field on top of a preset
+    GPT_PRESET=small gpt-train        # train the ~55M preset instead of the ~202M default
+    GPT_EMBED_SIZE=512 gpt-train      # or override one field on top of a preset
 
 `TrainConfig`'s defaults target a **single rented GPU** (see docs/GPU_TRAINING.md),
 not a laptop — unlike the sibling custom-gpt-{10m,50m} projects, whose `batch_size=1`
@@ -40,7 +40,7 @@ VOCAB_SIZE = 32768
 class ModelConfig:
     """Architecture. `param_count()` is exact — it mirrors model.py's actual layers.
 
-    Field defaults are this project's own ~153M architecture, so `PRESETS["153m"]`
+    Field defaults are this project's own ~202M architecture, so `PRESETS["200m"]`
     can be derived from them rather than restated — the two cannot drift apart.
     """
 
@@ -116,35 +116,47 @@ class TrainConfig:
     `steps` and `batch_size` together set the token budget:
 
         tokens = steps * batch_size * context_length
-               = 150_000 * 16 * 1024 = 2.46B
+               = 150_000 * 16 * 2048 = 4.92B
 
-    That is ~16 tokens per parameter against this model's 152.8M, near the
-    Chinchilla-optimal ~20:1 and sized to finish inside ~24 GPU-hours. Changing
-    `batch_size` without changing `steps` silently rescales the whole budget.
+    That is ~24 tokens per parameter against this model's 201.8M — a bit past the
+    Chinchilla-optimal ~20:1, the cost of the longer 2048-token context relative to
+    the 153m sibling's 1024. AWS_RUNBOOK.md's cost sheet prices this at roughly
+    44-55 GPU-hours depending on measured MFU (~$35-45 on-demand, less on spot) —
+    scale that estimate with `gpt-benchmark`, not this comment, before committing a
+    run. Changing `batch_size` without changing `steps` silently rescales the whole
+    budget.
     """
 
-    batch_size: int = 16         # ~10 GB VRAM at 153M/seq1024/bf16; fits 24 GB with room
-    grad_accum_steps: int = 4    # effective batch 64 seqs = 65,536 tokens per update
+    # VRAM is architecture- and context-length-dependent, so the 153m sibling's ~10 GB
+    # figure does not transfer here (deeper model, 2x context, no attention mask
+    # materialised via SDPA either way) — unmeasured. Run `gpt-benchmark --sweep-batch`
+    # on the actual instance before committing a multi-hour run; see docs/GPU_TRAINING.md.
+    batch_size: int = 16
+    grad_accum_steps: int = 4    # effective batch 64 seqs = 131,072 tokens per update
     lr: float = 4e-4             # 2e-4 is conservative at this size/batch (GPT-3 125M: 6e-4)
     min_lr: float = 4e-5
     weight_decay: float = 0.1
     grad_clip_norm: float = 1.0
-    steps: int = 150_000         # 2.46B tokens — see the class docstring
+    steps: int = 150_000         # 4.92B tokens — see the class docstring
     # Each eval is eval_batches*2 forward passes at full batch_size, so it is far more
     # expensive here than in the batch_size=1 sibling projects. 500 keeps it under ~3%
     # of step time; it is telemetry only and safe to change between resumes.
     eval_interval: int = 500
     # `best.pt` is gated on this sample, so its noise decides which checkpoint gets
     # kept. Each eval draws eval_batches * batch_size * context_length tokens per
-    # split — 40*16*1024 = 655,360 here, vs the 50m sibling's 20*1*1024 = 20,480,
+    # split — 40*16*2048 = 1,310,720 here, vs the 50m sibling's 20*1*1024 = 20,480,
     # whose measured per-eval sigma of ~0.14 let a single lucky draw hold `best.pt`
-    # for 60,000+ steps while the true loss kept falling. 40 puts sigma near 0.025
-    # for ~5% of wall clock; raising it further buys little (sigma only falls as
-    # 1/sqrt(n)) and the residual pathology is better fixed by smoothing than by
-    # more samples.
+    # for 60,000+ steps while the true loss kept falling. The 153m sibling's matching
+    # 40*16*1024 sample measured sigma near 0.025; this project's eval draws twice
+    # the tokens, so sigma should sit lower still (unmeasured here) — for ~5% of wall
+    # clock. Raising eval_batches further buys little (sigma only falls as 1/sqrt(n))
+    # and the residual pathology is better fixed by smoothing than by more samples.
     eval_batches: int = 40
-    # A checkpoint is ~1.8 GB (fp32 weights + AdamW moments), so saving every 200 steps
-    # would spend more time on I/O than on training. 2000 is ~17 min of wall clock.
+    # A checkpoint is ~2.4 GB (201.8M params x 4 bytes fp32 weights + 2x4 bytes AdamW
+    # moments = 12 bytes/param), so saving every 200 steps would spend more time on
+    # I/O than on training. Wall-clock per 2000 steps is unmeasured here (a bigger,
+    # longer-context model than the 153m sibling, whose ~17 min does not transfer) —
+    # read the actual steps/sec off `gpt-benchmark` before tuning this further.
     save_every_steps: int = 2_000
     seed: int = 42
     # "auto" = bfloat16 on CUDA, fp32 everywhere else. bf16 (not fp16) because it needs

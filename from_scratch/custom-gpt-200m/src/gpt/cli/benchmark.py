@@ -48,7 +48,9 @@ INSTANCE_PRICES = {
     "Tesla T4": ("g4dn.xlarge", 0.526),
 }
 
-TOKEN_BUDGETS = [1e9, 2e9, 2.46e9, 3e9, 5e9, 10e9]
+# 4.92e9 is this project's own configured budget (150_000 steps x 16 x 2048, see
+# config.TrainConfig) — not the 153m sibling's 2.46e9 (1024 context).
+TOKEN_BUDGETS = [1e9, 2e9, 3e9, 4.92e9, 5e9, 10e9]
 
 
 def flops_per_token(model_cfg, n_params):

@@ -77,6 +77,20 @@ aws s3 sync 's3://${bucket}/${corpus_prefix}' '$WORK_DIR/data/' --only-show-erro
 echo "corpus_prefix empty — skipping corpus sync (pull it by hand once you are on the box)"
 %{ endif ~}
 
+# ---------------------------------------------------------------- checkpoint (resume)
+# `gpt-train` auto-resumes from checkpoints/<label>/latest.pt if it exists — no flag,
+# no code change. This just needs to land in the right place before the first launch.
+%{ if checkpoint_prefix != "" ~}
+sudo -u "$USER_NAME" -H bash -c "
+mkdir -p '$WORK_DIR/checkpoints'
+aws s3 sync 's3://${bucket}/${checkpoint_prefix}' '$WORK_DIR/checkpoints/' --only-show-errors \
+  && find '$WORK_DIR/checkpoints' -name '*.pt' -exec ls -la {} \; \
+  || echo 'WARN: checkpoint sync failed'
+"
+%{ else ~}
+echo "checkpoint_prefix empty — fresh run, nothing to resume"
+%{ endif ~}
+
 # ---------------------------------------------------------------- shell env
 cat > /etc/profile.d/llm-lab.sh <<PROFILE
 export LLM_BUCKET="${bucket}"
@@ -100,11 +114,15 @@ set -uo pipefail
 INTERVAL_MIN=${checkpoint_sync_minutes}
 BUCKET="${bucket}"
 WORK_DIR="WORK_DIR_PLACEHOLDER"
+# Same prefix checkpoint_prefix pulls FROM at boot (see the "checkpoint (resume)"
+# section above) — periodic sync must write to the exact place a future resume
+# reads from, or a spot-killed box's newest progress is invisible to its own restart.
+CKPT_PREFIX="CKPT_PREFIX_PLACEHOLDER"
 
 sync_now() {
   [ -n "$BUCKET" ] || return 0
   [ -d "$WORK_DIR/checkpoints" ] || return 0
-  sudo -u ubuntu aws s3 sync "$WORK_DIR/checkpoints/" "s3://$BUCKET/checkpoints/" \
+  sudo -u ubuntu aws s3 sync "$WORK_DIR/checkpoints/" "s3://$BUCKET/$CKPT_PREFIX" \
     --exclude "*.tmp" --only-show-errors \
     && echo "$(date -Is) [ckpt-sync] ok" \
     || echo "$(date -Is) [ckpt-sync] FAILED"
@@ -120,6 +138,7 @@ done
 CKPTSYNC
 
 sed -i "s|WORK_DIR_PLACEHOLDER|$WORK_DIR|" /usr/local/bin/checkpoint-sync.sh
+sed -i "s|CKPT_PREFIX_PLACEHOLDER|%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }|" /usr/local/bin/checkpoint-sync.sh
 chmod 0755 /usr/local/bin/checkpoint-sync.sh
 
 cat > /etc/systemd/system/checkpoint-sync.service <<'UNIT'
@@ -139,7 +158,7 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now checkpoint-sync.service
-echo "checkpoint sync armed: every ${checkpoint_sync_minutes} min to s3://${bucket}/checkpoints/"
+echo "checkpoint sync armed: every ${checkpoint_sync_minutes} min to s3://${bucket}/%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }"
 %{ else ~}
 echo "periodic checkpoint sync disabled (checkpoint_sync_minutes = 0)"
 %{ endif ~}
@@ -244,8 +263,13 @@ while true; do
   if [ "$idle_min" -ge "$LIMIT_MIN" ]; then
     log "idle threshold reached — syncing checkpoints then stopping"
 
-    if [ -n "$BUCKET" ] && [ -d "$WORK_DIR/checkpoints" ]; then
-      sudo -u ubuntu aws s3 sync "$WORK_DIR/checkpoints/" "s3://$BUCKET/checkpoints/" \
+    # Reuse checkpoint-sync.sh so this lands at the exact prefix a future resume
+    # reads from (see the "checkpoint (resume)" section) — a second hardcoded
+    # path here would silently diverge from it the next time either one changes.
+    if [ -x /usr/local/bin/checkpoint-sync.sh ]; then
+      /usr/local/bin/checkpoint-sync.sh --once
+    elif [ -n "$BUCKET" ] && [ -d "$WORK_DIR/checkpoints" ]; then
+      sudo -u ubuntu aws s3 sync "$WORK_DIR/checkpoints/" "s3://$BUCKET/CKPT_PREFIX_PLACEHOLDER" \
         --only-show-errors || log "WARN: checkpoint sync failed"
     fi
 
@@ -264,6 +288,7 @@ done
 WATCHDOG
 
 sed -i "s|WORK_DIR_PLACEHOLDER|$WORK_DIR|" /usr/local/bin/gpu-idle-watchdog.sh
+sed -i "s|CKPT_PREFIX_PLACEHOLDER|%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }|" /usr/local/bin/gpu-idle-watchdog.sh
 chmod 0755 /usr/local/bin/gpu-idle-watchdog.sh
 
 cat > /etc/systemd/system/gpu-idle-watchdog.service <<'UNIT'

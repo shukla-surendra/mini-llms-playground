@@ -33,6 +33,31 @@ output "upload_corpus_hint" {
   value       = "aws s3 sync data/ s3://${local.bucket_name}/${var.corpus_prefix != "" ? var.corpus_prefix : "corpus/"} --exclude '*' --include '*.bin' --include '*.bin.json'"
 }
 
+output "upload_checkpoint_hint" {
+  description = "What to run on the Mac from inside a project dir, to make an existing run resumable on the instance. Empty unless checkpoint_prefix is set."
+  value       = var.checkpoint_prefix != "" ? "aws s3 sync checkpoints/ s3://${local.bucket_name}/${var.checkpoint_prefix}" : ""
+}
+
+output "project_subdir" {
+  description = "Which project the instance is set up for (the Makefile reads this for PROJECT_DIR)."
+  value       = var.project_subdir
+}
+
+output "repo_dir_name" {
+  description = "Directory the repo clones into on the instance under /home/ubuntu (the Makefile reads this to build the remote project path for `make gpu`)."
+  value       = var.repo_dir_name
+}
+
+output "corpus_prefix" {
+  description = "S3 prefix the instance pulls data/ from (the Makefile reads this for PREFIX)."
+  value       = var.corpus_prefix
+}
+
+output "checkpoint_prefix" {
+  description = "S3 prefix the instance pulls checkpoints/ from (the Makefile reads this for CKPT_PREFIX)."
+  value       = var.checkpoint_prefix
+}
+
 output "ami_id" {
   description = "Resolved AMI. Pin this into ami_id if you want a byte-identical box next time."
   value       = local.ami_id

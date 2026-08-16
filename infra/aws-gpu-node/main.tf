@@ -37,6 +37,7 @@ locals {
     region                 = var.region
     bucket                 = local.bucket_name
     corpus_prefix          = var.corpus_prefix
+    checkpoint_prefix      = var.checkpoint_prefix
     repo_url               = var.repo_url
     repo_dir_name          = var.repo_dir_name
     project_subdir         = var.project_subdir

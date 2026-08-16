@@ -9,6 +9,12 @@ Same box, same choices — the difference is that the choices are now written do
 identically every time, and destroyable in one command. The runbook still explains *why*
 each value is what it is; this module is the executable form of it.
 
+**Operating it day to day:** this README covers design decisions and cost. For the
+full command-by-command sequence — `apply` → upload data → launch → train → monitor
+→ manage → teardown — see [`docs/SOP.md`](docs/SOP.md). For the mechanics of
+resuming an existing checkpoint specifically (auto-resume, effective-batch matching,
+`tmux` disconnect-safety), see [`docs/RESUME_TRAINING.md`](docs/RESUME_TRAINING.md).
+
 ## What it creates
 
 | Resource | Why it is shaped this way |
@@ -23,6 +29,52 @@ each value is what it is; this module is the executable form of it.
 | Checkpoint sync + spot watcher (systemd) | `checkpoints/` → S3 every N minutes, and again inside the ~2-minute Spot interruption notice. This is what turns spot's 60-70% discount from a gamble into a default |
 | `aws_budgets_budget` (optional) | Forecast-based email alert, days before the damage |
 | cloud-init bootstrap | Installs `uv`, clones the repo, `uv sync`s the chosen project, pulls the corpus from S3 |
+
+## Prerequisites (one-time, on the Mac)
+
+Two CLIs, neither of which this repo installs for you.
+
+**Terraform**, via HashiCorp's Homebrew tap:
+
+```bash
+brew tap hashicorp/tap
+brew install hashicorp/tap/terraform
+terraform version              # confirm it's on PATH, >= 1.6 (see versions.tf)
+```
+
+That pulls the official binary (BSL-licensed, not open-source since v1.6). To stay
+fully open-source instead, swap in the drop-in fork and point the Makefile at it:
+
+```bash
+brew install opentofu
+# then in this dir's Makefile: change `TF ?= terraform` to `TF ?= tofu`
+```
+
+**AWS CLI**, needed for every `make` target that isn't a bare `terraform` command
+(`upload-corpus`, `download-checkpoints`, `ssh`'s IP lookup, `spot-price`, `stop`/`start`,
+`ssm`):
+
+```bash
+brew install awscli
+aws configure
+```
+
+`aws configure` asks for four things — enter them and it writes `~/.aws/credentials`:
+
+| Prompt | What to give it |
+|---|---|
+| AWS Access Key ID / Secret Access Key | From an **IAM user** with programmatic access — not your root account. Console → IAM → Users → your user → Security credentials → Create access key |
+| Default region | Match `region` in `terraform.tfvars` (`us-east-1` by default) — S3↔EC2 transfer is free in-region, billed and slower across regions |
+| Default output format | `json` (what the `--query` flags in this Makefile expect) |
+
+Verify it worked:
+
+```bash
+aws sts get-caller-identity   # should print your account id and IAM user ARN, not an error
+```
+
+This is a one-time setup per machine. Nothing above is specific to this module — it's
+the same pair of tools any Terraform-on-AWS project needs.
 
 ## Quickstart
 
@@ -65,6 +117,30 @@ upload).
 
 ## Decisions worth knowing about
 
+**No `.pem` — the key pair is imported, not AWS-generated.** `aws_key_pair.this` in
+`main.tf` runs `public_key = file(pathexpand(var.public_key_path))`: it reads a
+**public** key you already have and uploads only that half to AWS. That's different
+from the EC2 console's default flow, where AWS generates the pair itself and shows
+you the private half exactly once as a `.pem` to download. Here, AWS never holds a
+private key at all — there's nothing to download because the private half never
+existed on AWS's side. If `public_key_path` doesn't exist yet:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "mini-llm-gpu"
+```
+
+The private key stays on this Mac, permanently. To connect:
+
+```bash
+make ssh    # ssh -i ~/.ssh/id_ed25519 ubuntu@<public-ip> — same file, wired
+            # into $(KEY) in the Makefile and ssh_private_key_path in tfvars
+```
+
+There's also a second way in that needs **no key file at all**: `make ssm`, via
+Session Manager (the `AmazonSSMManagedInstanceCore` role attachment, `enable_ssm`).
+Useful if the key is ever lost, or your home IP rotates and port 22 is blocked
+before you get around to re-`apply`-ing.
+
 **AMI changes are ignored.** `lifecycle { ignore_changes = [ami] }` on the instance means
 a newer Deep Learning AMI released next week cannot quietly destroy a box that is 14 hours
 into a run when you apply an unrelated change. Rebuilding on the current AMI is an
@@ -103,19 +179,32 @@ this, uncomment the S3 backend in `versions.tf` — two divergent local states m
 
 ## Paying for the GPU and almost nothing else
 
-On a 21-hour run of `custom-gpt-153m`, the GPU is ~98% of the bill. Everything else is
-rounding error **while the run is happening** — the leaks are all in the time around it.
+Of the 14 resources this module plans, exactly **three** carry a real, ongoing charge.
+Everything else — IAM role/policies/instance-profile, the security group and its
+rules, the key pair, SSM sessions — is free, full stop, forever.
 
-| | Rate | 21-hour run |
-|---|---|---|
-| `g6.xlarge` on-demand | $0.8048/hr | **$16.90** |
-| `g6.xlarge` spot | ~60-70% off (`make spot-price`) | **~$5-7** |
-| 100 GB gp3 root | $0.08/GB-month | $0.23 |
-| Public IPv4 | $0.005/hr | $0.11 |
-| S3, ~600 MB corpus | $0.023/GB-month | ~$0.01 |
-| IAM, security group, key pair, budgets | free | $0 |
+| Cost | Billed while | Rate | Note |
+|---|---|---|---|
+| EC2 compute (`aws_instance`) | instance **running** | $0.8048/hr on-demand, ~60-70% less on spot | this is "the GPU"; everything below is not |
+| EBS root volume | instance **exists** — stopped *or* running | $0.08/GB-month → 100 GB ≈ $8/month | bundled inside `aws_instance`, not its own line in the resource list — easy to miss |
+| S3 storage | always, while objects exist | $0.023/GB-month | corpus + checkpoint together are usually a few GB → a few cents/month |
 
-Three rules follow from that table, in order of how much they save:
+Plus one small one that's easy to forget because it's account-wide AWS policy, not
+this module's choice: **public IPv4 is $0.005/hr** (~$3.60/month if the instance
+exists 24/7). It stops the moment the instance is destroyed, same as EBS.
+
+On a 21-hour on-demand run of `custom-gpt-153m`: **~$17 compute + $0.23 EBS + $0.11
+IP + ~$0.01 S3** — compute is ~98% of it. The leaks are all in the time *around* the
+run, not during it — which is what the rules below are actually about.
+
+**The budget alarm needs both variables, and silently isn't armed without them.**
+`monthly_budget_usd` alone does nothing — `aws_budgets_budget`'s `count` is
+`monthly_budget_usd > 0 && budget_alert_email != "" ? 1 : 0`, so setting only the
+number (as the example tfvars does) leaves it at `count = 0`: no resource, no alert,
+no error telling you so. Check `terraform plan` includes `aws_budgets_budget.monthly`
+before assuming it's watching.
+
+Three rules follow from the cost table, in order of how much they save:
 
 **1. Buy the GPU hour on spot.** `use_spot = true` is the whole game — it is the only
 line item large enough to matter. The module makes it safe rather than merely cheap

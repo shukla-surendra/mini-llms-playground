@@ -6,13 +6,20 @@ BUCKET  ?= $(shell $(TF) output -raw bucket 2>/dev/null)
 KEY     ?= ~/.ssh/id_ed25519
 TYPE    ?= g6.xlarge
 
-# Local project whose token files get uploaded by `make upload-corpus`
-PROJECT_DIR ?= ../../from_scratch/custom-gpt-153m
-PREFIX      ?= 153m/corpus/
+# Derived from terraform.tfvars via `terraform output`, so PROJECT_DIR/PREFIX can
+# never drift from what the instance was actually bootstrapped to sync — override
+# any of the three on the command line (e.g. `make upload-corpus PROJECT_DIR=...`)
+# only for a one-off that intentionally differs from the configured module.
+SUBDIR      ?= $(shell $(TF) output -raw project_subdir 2>/dev/null)
+PROJECT_DIR ?= ../../$(SUBDIR)
+PREFIX      ?= $(shell $(TF) output -raw corpus_prefix 2>/dev/null)
+CKPT_PREFIX ?= $(shell $(TF) output -raw checkpoint_prefix 2>/dev/null)
+REPO_DIR_NAME ?= $(shell $(TF) output -raw repo_dir_name 2>/dev/null)
+REMOTE_DIR    ?= ~/$(REPO_DIR_NAME)/$(SUBDIR)
 
 .PHONY: help init fmt validate plan apply ssh ssm tunnel bootstrap-log gpu \
-        upload-corpus download-checkpoints stop start status replace destroy \
-        up down spot-price sync-log
+        upload-corpus upload-checkpoint download-checkpoints stop start status \
+        replace destroy up down spot-price sync-log
 
 help:
 	@echo "Setup"
@@ -22,6 +29,7 @@ help:
 	@echo ""
 	@echo "Data (run these BEFORE apply — tokenizing on a GPU is money for nothing)"
 	@echo "  make upload-corpus        - sync *.bin + *.bin.json from PROJECT_DIR to s3://$(BUCKET)/$(PREFIX)"
+	@echo "  make upload-checkpoint    - sync an existing run's checkpoints/ up, for gpt-train to auto-resume"
 	@echo "  make download-checkpoints - pull checkpoints/ back down from S3"
 	@echo ""
 	@echo "Use"
@@ -72,15 +80,25 @@ tunnel:
 bootstrap-log:
 	ssh -i $(KEY) ubuntu@$(IP) 'tail -f /var/log/gpu-node-bootstrap.log'
 
+# torch lives in the project's uv-managed venv (created by `uv sync` at boot), not
+# system Python — bare `python3 -c "import torch"` would fail with ModuleNotFoundError
+# regardless of whether the GPU itself is fine. `uv run` picks up that venv correctly.
 gpu:
-	ssh -i $(KEY) ubuntu@$(IP) 'nvidia-smi; python3 -c "import torch; print(torch.cuda.get_device_name(), torch.cuda.is_bf16_supported())"'
+	ssh -i $(KEY) ubuntu@$(IP) 'nvidia-smi; cd $(REMOTE_DIR) && uv run python3 -c "import torch; print(torch.__version__, torch.cuda.get_device_name(), torch.cuda.is_bf16_supported())"'
 
 upload-corpus:
 	cd $(PROJECT_DIR) && aws s3 sync data/ s3://$(BUCKET)/$(PREFIX) \
 		--exclude "*" --include "*.bin" --include "*.bin.json"
 
+# Makes an existing local run resumable on the instance: gpt-train auto-resumes
+# from checkpoints/<label>/latest.pt with no flag once this lands in the right
+# place at boot (checkpoint_prefix in terraform.tfvars must be set to match).
+upload-checkpoint:
+	cd $(PROJECT_DIR) && aws s3 sync checkpoints/ s3://$(BUCKET)/$(CKPT_PREFIX) \
+		--exclude "*.DS_Store"
+
 download-checkpoints:
-	cd $(PROJECT_DIR) && aws s3 sync s3://$(BUCKET)/checkpoints/ checkpoints/
+	cd $(PROJECT_DIR) && aws s3 sync s3://$(BUCKET)/$(CKPT_PREFIX) checkpoints/
 
 sync-log:
 	ssh -i $(KEY) ubuntu@$(IP) 'journalctl -u checkpoint-sync -u spot-watch -f'

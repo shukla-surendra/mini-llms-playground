@@ -202,6 +202,12 @@ variable "corpus_prefix" {
   default     = ""
 }
 
+variable "checkpoint_prefix" {
+  description = "S3 prefix synced into <project_subdir>/checkpoints at boot — for resuming an existing run rather than starting fresh. Empty = skip (fresh run, no checkpoint to resume from). Point it at a prefix that mirrors this project's own checkpoints/<label>/ layout (e.g. '50m/checkpoints/' holding a checkpoints/50m/*.pt tree upload via `make upload-checkpoint`), so gpt-train's auto-resume finds latest.pt exactly where it looks — no code or command-line flag needed."
+  type        = string
+  default     = ""
+}
+
 ########################################
 # Cost guards
 ########################################
