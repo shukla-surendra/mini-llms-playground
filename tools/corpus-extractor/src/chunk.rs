@@ -54,6 +54,21 @@ pub fn chunk_text(bpe: &CoreBPE, text: &str, chunk_tokens: usize, overlap: usize
     chunks
 }
 
+/// Wrap the whole (already-cleaned) file text as a single unchunked `Chunk` — used by
+/// `--raw-text-only`. Still tokenized against the same GPT-2 tokenizer so the resulting
+/// record's `token_count` stays comparable to a chunked run's, even though no windowing
+/// happens.
+pub fn whole_file(bpe: &CoreBPE, text: &str) -> Vec<Chunk> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let token_count = bpe.encode_ordinary(text).len();
+    vec![Chunk {
+        text: text.to_string(),
+        token_count,
+    }]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +97,22 @@ mod tests {
         for c in &chunks {
             assert!(c.token_count <= 50);
         }
+    }
+
+    #[test]
+    fn whole_file_produces_exactly_one_unwindowed_chunk() {
+        let bpe = load_tokenizer().unwrap();
+        let text = "the quick brown fox jumps over the lazy dog. ".repeat(200);
+        let chunks = whole_file(&bpe, &text);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, text);
+        assert!(chunks[0].token_count > 50); // proves it wasn't windowed like chunk_text would
+    }
+
+    #[test]
+    fn whole_file_empty_text_produces_no_chunks() {
+        let bpe = load_tokenizer().unwrap();
+        assert!(whole_file(&bpe, "").is_empty());
+        assert!(whole_file(&bpe, "   \n  ").is_empty());
     }
 }

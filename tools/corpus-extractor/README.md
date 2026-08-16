@@ -21,6 +21,33 @@ exact tokenizer `custom-gpt-10m`/`custom-gpt-153m` train against
 here) — so a `--chunk-tokens 512` chunk really is ~512 tokens once it reaches that
 project's training loop, not an estimate that drifts once real tokenization happens.
 
+## Features
+
+- **7 input formats**: `.pdf`, `.epub`, `.txt`, `.md`, `.rs`, `.html`/`.htm`, `.js`, `.py`
+  — pure-text formats read directly (lossy UTF-8 fallback on bad bytes), HTML/EPUB
+  converted via `html2text`, PDF via pure-Rust `pdf-extract` (no `poppler`/system deps).
+- **Recursive, `.gitignore`-aware directory walk** — same walker `ripgrep` uses, so
+  `target/`, `node_modules/`, `.venv/`, and similar generated/vendored trees are skipped
+  by default even outside a git repo.
+- **Token-accurate chunking with overlap** — sliding GPT-2 (`r50k_base`) token windows
+  (`--chunk-tokens`/`--chunk-overlap`), or, with `--raw-text-only`, each file kept as a
+  single unchunked record instead.
+- **Whitespace normalization** before chunking (line-ending unification, collapsed blank
+  runs) so chunk boundaries aren't computed against extraction noise.
+- **Quality filtering** — drops chunks that are too short (`--min-chars`) or too
+  non-ASCII (`--min-ascii-ratio`), a cheap proxy for garbled/binary extraction output.
+- **Exact-duplicate removal** (hash-based, O(n)) — disable with `--no-dedupe`.
+- **Seeded shuffle + train/test split** (`--train-ratio`, `--seed`), or skip it entirely
+  with `--no-split` for a single combined dataset.
+- **Dual output**: JSONL with per-chunk metadata, plus an optional plain-text corpus
+  (`--no-emit-text` to skip) formatted as a drop-in for `custom-gpt-10m`'s `data/` folder.
+- **Crash-proof per-file extraction** — a panic inside a format crate (real-world PDFs
+  are known to trigger this) is caught and reported as a normal skipped file instead of
+  aborting the whole batch.
+- **Progress bar with ETA** during extraction, plus an end-of-run summary (files
+  scanned/extracted/failed, chunks before/after filtering and dedupe, per-extension
+  counts kept).
+
 ## Build
 
 ```bash
@@ -46,8 +73,35 @@ corpus-extractor --input ~/notes --output out
 cp out/train.txt out/test.txt ../../from_scratch/custom-gpt-10m/data/
 ```
 
-Full flag reference: `corpus-extractor --help` (every flag's default and reasoning is
-documented inline in `src/cli.rs`, not duplicated here where it could drift out of sync).
+```bash
+# one record per file, no token-windowing — useful when a downstream step wants each
+# document whole rather than pre-chunked
+corpus-extractor --input ./my-notes --output out --raw-text-only
+```
+
+### Flag reference
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-i, --input <DIR>` | *(required)* | Folder to scan recursively for source files. |
+| `-o, --output <DIR>` | `dataset_out` | Output directory for JSONL (and, unless `--no-emit-text`, plain-text) files. |
+| `--extensions <LIST>` | `pdf,epub,txt,md,rs,html,js,py` | Comma-separated extensions to include (no dots). |
+| `--chunk-tokens <N>` | `512` | Target chunk size in GPT-2 (`r50k_base`) tokens. Ignored with `--raw-text-only`. |
+| `--chunk-overlap <N>` | `50` | Token overlap between consecutive chunks from the same file. Must be smaller than `--chunk-tokens`; ignored with `--raw-text-only`. |
+| `--min-chars <N>` | `40` | Drop any chunk shorter than this many characters after cleaning. |
+| `--min-ascii-ratio <F>` | `0.5` | Drop any chunk whose ASCII-character ratio falls below this. |
+| `--train-ratio <F>` | `0.9` | Fraction of chunks written to the train split; the rest go to test. |
+| `--seed <N>` | `42` | Shuffle seed — fixed by default for a reproducible split across re-runs. |
+| `--no-split` | off | Skip the train/test split; write a single `dataset.jsonl`/`dataset.txt` instead. |
+| `--no-dedupe` | off | Skip exact-duplicate chunk removal. |
+| `--no-emit-text` | off | Skip writing the plain-text corpus alongside the JSONL. |
+| `--raw-text-only` | off | One unchunked record per file (whole cleaned text) instead of token-windowed chunks. Still passes through the quality filter, dedupe, and split stages. |
+| `-h, --help` | — | Print full help. |
+| `-V, --version` | — | Print version. |
+
+Every flag's default and reasoning is also documented inline in `src/cli.rs`, kept as the
+single source of truth so this table can't silently drift out of sync — re-check there
+(or `corpus-extractor --help`) if in doubt.
 
 ## The pipeline, stage by stage
 
@@ -55,7 +109,8 @@ documented inline in `src/cli.rs`, not duplicated here where it could drift out 
 walk        (src/walk.rs)     -> every file under --input matching --extensions
 extract     (src/extract.rs)  -> raw text, per format (plain read / html2text / pdf-extract / epub)
 clean       (src/clean.rs)    -> whitespace normalization
-chunk       (src/chunk.rs)    -> GPT-2-token-accurate windows, with overlap
+chunk       (src/chunk.rs)    -> GPT-2-token-accurate windows, with overlap (or, with
+                                  --raw-text-only, the whole cleaned file as one record)
 filter      (src/clean.rs)    -> drop chunks that are too short or too non-ASCII
 dedupe      (src/dataset.rs)  -> drop exact-duplicate chunks (hash-based, O(n))
 split       (src/dataset.rs)  -> seeded shuffle, train/test split
@@ -76,7 +131,7 @@ enough to bury the real content in duplicated/irrelevant chunks.
 ## Output format
 
 **JSONL** (`train.jsonl`/`test.jsonl`, or `dataset.jsonl` with `--no-split`) — one record
-per chunk:
+per chunk (or, with `--raw-text-only`, one record per file, always `"chunk_index": 0`):
 
 ```json
 {"text": "...", "source_path": "/abs/path/file.py", "file_type": "py", "chunk_index": 0, "char_count": 812, "token_count": 512}

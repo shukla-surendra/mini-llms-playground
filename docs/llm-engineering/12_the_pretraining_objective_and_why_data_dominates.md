@@ -80,8 +80,10 @@ already present in the corpus*. A model can't learn a fact, a style, or a capabi
 training data never demonstrated, no matter how cleverly the objective extracts signal from
 what *is* there. This is why, in practice, decisions about pretraining data composition,
 scale, and quality tend to matter as much as (often more than) the specific objective
-chosen — a theme Chapter 14 ("Scaling Laws," planned — see [Chapter 0](00_roadmap.md)) picks up in
-more depth.
+chosen — [Chapter 34](34_data_preparation_strategies_for_pretraining.md) picks this up as
+the practical pipeline (collection, filtering, deduplication, mixture weighting, packing),
+and Chapter 14 ("Scaling Laws," planned — see [Chapter 0](00_roadmap.md)) picks up the
+model-size side of the same argument.
 
 ## Grounded in This Repo's Code
 

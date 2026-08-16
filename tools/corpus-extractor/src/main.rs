@@ -78,7 +78,11 @@ fn main() -> Result<()> {
         stats.files_extracted += 1;
 
         let cleaned = clean::normalize_whitespace(&raw_text);
-        let chunks = chunk::chunk_text(&bpe, &cleaned, args.chunk_tokens, args.chunk_overlap);
+        let chunks = if args.raw_text_only {
+            chunk::whole_file(&bpe, &cleaned)
+        } else {
+            chunk::chunk_text(&bpe, &cleaned, args.chunk_tokens, args.chunk_overlap)
+        };
         stats.chunks_before_filter += chunks.len();
 
         for (i, c) in chunks.into_iter().enumerate() {

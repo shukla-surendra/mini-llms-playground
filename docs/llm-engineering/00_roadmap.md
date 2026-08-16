@@ -71,6 +71,20 @@ training loop, and why each piece is there.
 | 14 | Scaling Laws: Why Bigger Models, and When They Stop Helping | planned |
 | 15 | [Evaluating a Model While It's Still Training](15_evaluating_a_model_while_training.md) | **written** |
 
+### Part 2C — Data Preparation: The Practical Pipeline Behind "Data Dominates"
+
+Appended after the original catalog, same reason as Part 2B: avoids renumbering
+already-written chapters. Belongs right after Chapter 12 in reading order — see "Reading
+order" below. Chapter 12 argues *why* the corpus, not the objective or architecture, sets
+the ceiling on what a model can learn; this chapter is the practical follow-up — the actual
+levers (collection, filtering, deduplication, mixture weighting vs. capping, packing and
+document-boundary masking, tokenization, base-vs-SFT format) a real pipeline pulls, each
+tied to an observed failure mode in a real trained checkpoint's QA report.
+
+| # | Chapter | Status |
+|---|---|---|
+| 34 | [Data Preparation Strategies for Pretraining](34_data_preparation_strategies_for_pretraining.md) | **written** |
+
 ### Part 2B — Training at Scale: Efficiency, Distribution, and Continuity
 
 Appended after the original catalog above rather than inserted between 15 and 16, to avoid
@@ -151,11 +165,11 @@ Part 1 (7 → 10), which is LLM-specific vocabulary built on Part 0's general on
 want the LLM-specific material**: skip to Part 1 directly, referencing Part 0 chapters
 only if a specific term (e.g., "what exactly is a hyperparameter") needs a refresher.
 
-**If you're following Part 2 (Pretraining) start to finish**: read Part 2B (25 → 28)
-immediately after Part 2's own chapters (12 → 15), despite the higher chapter numbers —
-they were appended after the original catalog to avoid renumbering already-written
-chapters, but belong right after "how the training loop works" in reading order, before
-moving on to Part 3 (Fine-Tuning).
+**If you're following Part 2 (Pretraining) start to finish**: read Chapter 34 (Part 2C)
+immediately after Chapter 12, despite the higher chapter number — it's the practical
+data-pipeline follow-up to "why data dominates," appended after the original catalog to
+avoid renumbering. Then continue 13 → 15, and read Part 2B (25 → 28) right after, before
+moving on to Part 3 (Fine-Tuning) — same appended-after-the-catalog reasoning.
 
 **If you want fine-tuning specifically**: skim Part 1's architecture chapter (10) for
 vocabulary, then go straight to Part 3, run alongside

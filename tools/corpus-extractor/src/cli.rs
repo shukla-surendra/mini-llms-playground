@@ -71,4 +71,11 @@ pub struct Args {
     /// matching custom-gpt-10m's train.txt convention directly.
     #[arg(long)]
     pub no_emit_text: bool,
+
+    /// Extract each file's cleaned text as a single unchunked record instead of
+    /// GPT-2-token windows — --chunk-tokens/--chunk-overlap are ignored when this is
+    /// set. Still passes through the same quality filter, dedupe, and train/test split
+    /// as chunked runs; only the chunking stage itself is skipped.
+    #[arg(long)]
+    pub raw_text_only: bool,
 }

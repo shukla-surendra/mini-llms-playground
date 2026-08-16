@@ -181,7 +181,7 @@ variable "force_destroy_bucket" {
 variable "repo_url" {
   description = "Git repo cloned onto the instance at boot."
   type        = string
-  default     = "https://github.com/shukla-surendra/tiny_llm.git"
+  default     = "https://github.com/shukla-surendra/mini-llms-playground.git"
 }
 
 variable "repo_dir_name" {

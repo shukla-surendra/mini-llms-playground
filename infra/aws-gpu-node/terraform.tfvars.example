@@ -26,7 +26,7 @@ ssh_private_key_path = "~/.ssh/id_ed25519"
 create_bucket = true
 # bucket_name = "my-existing-llm-bucket"
 
-repo_url       = "https://github.com/shukla-surendra/tiny_llm.git"
+repo_url       = "https://github.com/shukla-surendra/mini-llms-playground.git"
 project_subdir = "from_scratch/custom-gpt-153m"
 
 # Prefix synced into <project_subdir>/data at boot. Upload the token files first:
