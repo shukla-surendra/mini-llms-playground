@@ -23,8 +23,8 @@ from pathlib import Path
 # loading the tokenizer; verified against the real tokenizer at training time.
 # This project trains its OWN tokenizer (see cli/train_tokenizer.py) rather than
 # reusing GPT-2's. Two reasons, both about reasoning rather than tidiness:
-#   * GPT-2's 50,257-token vocabulary would cost 45.0M of a 200M budget (22%) at
-#     E=896. A 32,768 vocabulary costs 29.4M, redirecting 15.7M into transformer
+#   * GPT-2's 50,257-token vocabulary would cost 51.4M of a 350M budget (15%) at
+#     E=1024. A 32,768 vocabulary costs 33.6M, redirecting 17.9M into transformer
 #     blocks — real capacity rather than lookup table.
 #   * GPT-2's BPE merges digits inconsistently ("1234" may be one token, "1235"
 #     three), which directly damages arithmetic. Ours splits digits individually,
@@ -40,15 +40,15 @@ VOCAB_SIZE = 32768
 class ModelConfig:
     """Architecture. `param_count()` is exact — it mirrors model.py's actual layers.
 
-    Field defaults are this project's own ~202M architecture, so `PRESETS["200m"]`
+    Field defaults are this project's own ~347M architecture, so `PRESETS["350m"]`
     can be derived from them rather than restated — the two cannot drift apart.
     """
 
     context_length: int = 2048
-    embed_size: int = 896
-    num_heads: int = 14          # head_dim = 64, the size SDPA's fused kernels want
-    num_layers: int = 18
-    ffn_hidden: int = 2368       # ~8/3 * embed_size — see below
+    embed_size: int = 1024
+    num_heads: int = 16          # head_dim = 64, the size SDPA's fused kernels want
+    num_layers: int = 25
+    ffn_hidden: int = 2720       # ~8/3 * embed_size — see below
     rope_theta: float = 10000.0
     dropout: float = 0.1
     vocab_size: int = VOCAB_SIZE
@@ -118,12 +118,14 @@ class TrainConfig:
         tokens = steps * batch_size * context_length
                = 150_000 * 16 * 2048 = 4.92B
 
-    That is ~24 tokens per parameter against this model's 201.8M — a bit past the
-    Chinchilla-optimal ~20:1, the cost of the longer 2048-token context relative to
-    the 153m sibling's 1024. AWS_RUNBOOK.md's cost sheet prices this at roughly
-    44-55 GPU-hours depending on measured MFU (~$35-45 on-demand, less on spot) —
-    scale that estimate with `gpt-benchmark`, not this comment, before committing a
-    run. Changing `batch_size` without changing `steps` silently rescales the whole
+    That is ~14 tokens per parameter against this model's 347.4M — noticeably under
+    the Chinchilla-optimal ~20:1 (unlike the 200m sibling this was scaffolded from,
+    which sits a bit past it at the same step/batch/context settings copied over
+    unchanged). `steps` was not retuned for the larger parameter count — raise it
+    (e.g. toward 215,000 for ~20:1, i.e. ~7.05B tokens) before a real run, and get a
+    fresh GPU-hours/cost estimate from `gpt-benchmark` + AWS_RUNBOOK.md rather than
+    reusing the 200m sibling's 44-55 GPU-hour figure, which does not transfer.
+    Changing `batch_size` without changing `steps` silently rescales the whole
     budget.
     """
 
@@ -152,11 +154,11 @@ class TrainConfig:
     # clock. Raising eval_batches further buys little (sigma only falls as 1/sqrt(n))
     # and the residual pathology is better fixed by smoothing than by more samples.
     eval_batches: int = 40
-    # A checkpoint is ~2.4 GB (201.8M params x 4 bytes fp32 weights + 2x4 bytes AdamW
+    # A checkpoint is ~4.2 GB (347.4M params x 4 bytes fp32 weights + 2x4 bytes AdamW
     # moments = 12 bytes/param), so saving every 200 steps would spend more time on
-    # I/O than on training. Wall-clock per 2000 steps is unmeasured here (a bigger,
-    # longer-context model than the 153m sibling, whose ~17 min does not transfer) —
-    # read the actual steps/sec off `gpt-benchmark` before tuning this further.
+    # I/O than on training. Wall-clock per 2000 steps is unmeasured here (bigger and
+    # deeper than the 200m sibling this was scaffolded from) — read the actual
+    # steps/sec off `gpt-benchmark` before tuning this further.
     save_every_steps: int = 2_000
     seed: int = 42
     # "auto" = bfloat16 on CUDA, fp32 everywhere else. bf16 (not fp16) because it needs
@@ -175,10 +177,10 @@ PRESETS = {
                          num_layers=12, ffn_hidden=1376),
     # This project's own default architecture, derived from ModelConfig's field
     # defaults so the two cannot drift apart.
-    "200m": ModelConfig(),
+    "350m": ModelConfig(),
 }
 
-DEFAULT_PRESET = "200m"
+DEFAULT_PRESET = "350m"
 
 _ENV_OVERRIDES = {
     "context_length": ("GPT_CONTEXT_LENGTH", int),

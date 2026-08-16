@@ -1,5 +1,5 @@
 [project]
-name = "custom-gpt-153m"
+name = "custom-gpt-350m"
 version = "0.1.0"
 description = "From-scratch GPT with a config-driven model size — train, evaluate, and serve."
 readme = "README.md"

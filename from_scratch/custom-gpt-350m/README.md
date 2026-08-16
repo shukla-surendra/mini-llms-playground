@@ -1,13 +1,13 @@
-# custom-gpt-200m
+# custom-gpt-350m
 
-A ~200M-parameter decoder aimed at **reasoning**, and the first project here that does
-not reuse the GPT-2-style stack of its siblings: RoPE instead of learned positions,
-SwiGLU instead of a GELU MLP, RMSNorm, no biases, and **its own digit-aware 32K
-tokenizer** rather than GPT-2's 50,257-entry vocabulary.
+A ~350M-parameter decoder aimed at **reasoning**, scaffolded from the `custom-gpt-200m`
+sibling and sharing its architecture: RoPE instead of learned positions, SwiGLU instead
+of a GELU MLP, RMSNorm, no biases, and **its own digit-aware 32K tokenizer** rather than
+GPT-2's 50,257-entry vocabulary.
 
 ```
-vocab 32,768   E=896   L=18   H=14 (head_dim 64)   ffn 2,368 (SwiGLU)   ctx 2,048
--> 201,769,344 parameters, 85% of them in transformer blocks
+vocab 32,768   E=1024   L=25   H=16 (head_dim 64)   ffn 2,720 (SwiGLU)   ctx 2,048
+-> 347,360,256 parameters, 90% of them in transformer blocks
 ```
 
 Why each of those: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
@@ -30,7 +30,7 @@ every checkpoint (not migratable). Corpus layout and the cross-tokenizer safety 
 
 ## Before spending money on this
 
-Architecture is the smallest lever on reasoning at 200M. Chinchilla-optimal here is 4B
+Architecture is the smallest lever on reasoning at 350M. Chinchilla-optimal here is ~7B
 tokens; the small models that actually reason saw 4T-18T. Read
 [`DATASET.md`](DATASET.md) and run `make benchmark` before committing GPU hours.
 
