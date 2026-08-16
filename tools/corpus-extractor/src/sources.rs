@@ -28,7 +28,7 @@ impl DatasetSource {
     /// Local directory name under `<data-dir>/raw/` — `hf_id` with `/` and `:`
     /// replaced by `__`, matching `sources.py`'s `DatasetSource.slug`.
     pub fn slug(&self) -> String {
-        self.hf_id.replace('/', "__").replace(':', "__")
+        self.hf_id.replace(['/', ':'], "__")
     }
 }
 

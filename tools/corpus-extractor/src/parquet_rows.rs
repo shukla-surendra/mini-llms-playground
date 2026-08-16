@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use arrow_array::{Array, ArrayRef, Int32Array, Int64Array, LargeListArray, LargeStringArray, ListArray, RecordBatch, StringArray, StructArray};
@@ -301,6 +302,77 @@ fn oasst_conversations_from_file(
 /// [`load_rows`] — kept as a separate entry point (rather than a `Schema::OasstTree`
 /// branch inside `rows_from_file`) since the tree walk needs the whole file's rows in
 /// scope at once, not a per-row dispatch.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_schema::{DataType, Field, Schema};
+
+    fn batch_of(fields: Vec<(&str, Vec<Option<&str>>)>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(
+            fields.iter().map(|(name, _)| Field::new(*name, DataType::Utf8, true)).collect::<Vec<_>>(),
+        ));
+        let columns: Vec<ArrayRef> = fields
+            .into_iter()
+            .map(|(_, values)| Arc::new(StringArray::from(values)) as ArrayRef)
+            .collect();
+        RecordBatch::try_new(schema, columns).unwrap()
+    }
+
+    #[test]
+    fn instruction_schema_pairs_prompt_and_response() {
+        let batch = batch_of(vec![
+            ("instruction", vec![Some("What is 2+2?")]),
+            ("input", vec![None]),
+            ("output", vec![Some("2+2 equals 4, a basic arithmetic fact.")]),
+        ]);
+        let turns = instruction_turns(&batch, 0, 5, 0.9);
+        assert_eq!(turns, vec![
+            (Role::User, "What is 2+2?".to_string()),
+            (Role::Assistant, "2+2 equals 4, a basic arithmetic fact.".to_string()),
+        ]);
+    }
+
+    #[test]
+    fn instruction_schema_folds_input_into_the_user_turn() {
+        let batch = batch_of(vec![
+            ("instruction", vec![Some("Summarize this passage.")]),
+            ("input", vec![Some("The quick brown fox jumps over the lazy dog.")]),
+            ("output", vec![Some("A fox jumps over a dog in this short passage.")]),
+        ]);
+        let turns = instruction_turns(&batch, 0, 5, 0.9);
+        assert_eq!(
+            turns[0],
+            (
+                Role::User,
+                "Summarize this passage.\nThe quick brown fox jumps over the lazy dog.".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn instruction_schema_rejects_short_turns() {
+        let batch = batch_of(vec![
+            ("instruction", vec![Some("Hi")]),
+            ("input", vec![None]),
+            ("output", vec![Some("Hello there, general greetings to you too friend.")]),
+        ]);
+        assert!(instruction_turns(&batch, 0, 24, 0.9).is_empty());
+    }
+
+    #[test]
+    fn keeps_conversation_requires_both_roles_and_min_turns() {
+        let user_only = vec![(Role::User, "hi there".to_string())];
+        assert!(!keeps_conversation(&user_only, 1));
+
+        let both_roles = vec![
+            (Role::User, "hi there".to_string()),
+            (Role::Assistant, "hello".to_string()),
+        ];
+        assert!(keeps_conversation(&both_roles, 2));
+        assert!(!keeps_conversation(&both_roles, 3));
+    }
+}
+
 pub fn load_oasst_conversations(
     files: &[PathBuf],
     cap: usize,

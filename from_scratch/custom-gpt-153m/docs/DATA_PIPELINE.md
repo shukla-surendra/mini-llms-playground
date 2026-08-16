@@ -92,23 +92,35 @@ make data           # all registered HF datasets (needs HF_TOKEN for gated LMSYS
 make data-public     # same, minus the gated LMSYS dataset
 ```
 
-This is `gpt-data` (see [`DATASETS.md`](DATASETS.md) for the full registry and
-[`DATA_PREP_GUIDELINE.md`](DATA_PREP_GUIDELINE.md) for the quality-filter mechanics) —
-downloads every dataset in `src/gpt/data/sources.py`'s `DATASETS` registry, parses each
-into `(prompt, response)`-shaped conversations, and — **automatically, with no flag to
-remember** — pools in `data/books_staging/dataset.jsonl` if `make books` already
-produced it (`Makefile`'s `EXTRA_JSONL_FLAG`, re-checked on every invocation). Delete
-`data/books_staging/` if you want an HF-only corpus instead; there's no separate
-"books off" switch to set anywhere else.
+**This runs `tools/corpus-extractor build-corpus` (Rust), not the Python `gpt-data`
+CLI** — see [`tools/corpus-extractor/README.md`](../../../tools/corpus-extractor/README.md#build-corpus--hugging-face-datasets---traintxttesttxttest_promptstxt)
+for the full flag reference. It downloads every dataset in `tools/corpus-extractor/src/sources.rs`'s
+registry (a manually-synced mirror of `src/gpt/data/sources.py`'s `DATASETS` — see
+[`DATASETS.md`](DATASETS.md) for the full registry and
+[`DATA_PREP_GUIDELINE.md`](DATA_PREP_GUIDELINE.md) for the quality-filter mechanics),
+parses each into `(role, text)`-shaped conversations, and — **automatically, with no
+flag to remember** — pools in `data/books_staging/dataset.jsonl` if `make books`
+already produced it (`Makefile`'s `EXTRA_JSONL_FLAG`, re-checked on every invocation,
+passed through as `build-corpus --extra-jsonl`). Delete `data/books_staging/` if you
+want an HF-only corpus instead; there's no separate "books off" switch to set anywhere
+else.
 
-**Sources download and parse in parallel**, one worker process per registered source
-(`--workers N` to cap it, `--workers 1` to force the old sequential behavior) —
-`_download_and_parse_source()` in `src/gpt/data/prepare.py`. Real process parallelism,
-not threads: the per-row `extract_turns()` parsing loop is plain Python under the
-GIL, so only separate processes actually run it concurrently on multiple cores.
-Verified deterministic regardless of worker count the same way
-`tools/corpus-extractor`'s own parallel extraction was verified — a parallel run and a
-`--workers 1` run on the same input produce byte-identical `train.txt`/`test.txt`.
+**Sources download and parse in parallel**, one `rayon` worker thread per registered
+source by default (`--threads N` to cap it) — ordinary thread parallelism, not
+Python's process-pool workaround, since there's no GIL to route around in Rust and
+parquet reads happen columnarly (`arrow`/`parquet`) rather than row-by-row. Verified
+deterministic regardless of thread count the same way `extract`'s own parallel
+extraction was verified — rayon's `par_iter().map().collect()` preserves the source
+list's original order in its result automatically, so the reproducible shuffle
+(`--seed`, default 42) holds regardless of which source's download finishes first.
+
+**Python fallback**: `make data-legacy` / `make data-legacy-public` run the original
+`gpt-data` CLI (`src/gpt/data/prepare.py`, `--workers N` for its
+`ProcessPoolExecutor`-based parallelism) — kept in the tree as a reference/fallback,
+not the default. Both paths write the same `train.txt`/`test.txt`/`test_prompts.txt`
+shape, so either one's output is a drop-in for the other's; downstream stages
+(`gpt-audit`, `gpt-tokenize`/`corpus-extractor tokenize`, `gpt-train`) don't care which
+one produced the corpus.
 
 Everything — every HF conversation and every book chunk — is pooled into one list,
 shuffled with a fixed seed (`--seed 42` by default), and split train/test together in
@@ -150,13 +162,26 @@ make tokenize          # skips files whose .bin is already newer than its .txt s
 make tokenize-force    # rebuild unconditionally
 ```
 
-Converts `data/train.txt`/`data/test.txt` into flat `uint16` `.bin` files
-(`gpt-tokenize`, GPT-2's `tiktoken` encoding — this project's `TOKENIZER_NAME`, no
-training step needed since it's a fixed public vocabulary, unlike the RoPE-family
-siblings' self-trained tokenizer). Training reads the `.bin` as a memory-mapped array,
-so the corpus never has to fit in RAM — see `src/gpt/data/dataset.py`. This is the
-literal "final trainable format": `gpt-train` reads `.bin` files directly, never
-`.txt`.
+**This runs `tools/corpus-extractor tokenize` (Rust)**, not the Python `gpt-tokenize`
+CLI. It streams `data/train.txt`/`data/test.txt` through GPT-2's `r50k_base` tokenizer
+(`tiktoken-rs`; this project's `TOKENIZER_NAME` = `"gpt2"` on the Python side — same
+tokenizer, no training step needed since it's a fixed public vocabulary, unlike the
+RoPE-family siblings' self-trained tokenizer) into flat `uint16` `.bin` files. Training
+reads the `.bin` as a memory-mapped array, so the corpus never has to fit in RAM — see
+`src/gpt/data/dataset.py`. This is the literal "final trainable format": `gpt-train`
+reads `.bin` files directly, never `.txt`.
+
+Each `.bin` gets a `.bin.json` fingerprint (vocab size + a probe string's token ids,
+SHA-256-hashed) that `gpt/data/dataset.py::load_token_array()` checks before training
+— this is the one place the Rust and Python implementations' output has to be
+**byte-identical**, not just equivalent, since either one may write a `.bin` the other
+later reads. Verified directly: a `.bin` built by `corpus-extractor tokenize` loads
+through Python's `load_token_array()` with no fingerprint mismatch, and the token
+counts match exactly.
+
+**Python fallback**: `make tokenize-legacy` / `make tokenize-legacy-force` run the
+original `gpt-tokenize` CLI (`src/gpt/data/dataset.py::build_token_bin()`) — kept as a
+reference, not the default.
 
 **Verify before training:** `make config` and confirm `paths.corpus` points at the
 files you expect; `ls -la data/*.bin` and sanity-check the size roughly tracks the
@@ -168,11 +193,11 @@ usually means tokenization silently ran against stale/empty input).
 - **Repo-source extraction** (the `.rs`/`.md`/`.py` extraction pattern
   `BOOKS_CORPUS_INTEGRATION.md`'s Step 5 describes for `custom-gpt-10m`) has no
   `make` target here. `make books` is scoped to `pdf,epub` only. Adding repo sources
-  is a real, separate follow-up — run corpus-extractor by hand with
+  is a real, separate follow-up — run `corpus-extractor extract` by hand with
   `--extensions rs,md,py`, output to a new `data/repos_staging/dataset.jsonl`, and
-  pass it via a second `--extra-jsonl` (the flag is repeatable — see `gpt-data --help`)
-  rather than trying to force it through the single `EXTRA_JSONL_FLAG` variable this
-  Makefile currently wires up automatically.
+  pass it via a second `--extra-jsonl` (the flag is repeatable — see
+  `corpus-extractor build-corpus --help`) rather than trying to force it through the
+  single `EXTRA_JSONL_FLAG` variable this Makefile currently wires up automatically.
 - **Wikipedia / non-conversational extra sources** (`BOOKS_CORPUS_INTEGRATION.md`'s
   Step 6) likewise have no `make` target — they used a one-off `ingest_wikipedia.py`
   script producing the same `--extra-jsonl`-compatible JSONL shape, not something this
