@@ -8,7 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -100,6 +100,43 @@ pub fn write_jsonl(path: &Path, records: &[Record]) -> Result<()> {
     }
     writer.flush()?;
     Ok(())
+}
+
+/// `12345` -> `"12,345"` — Python's `f"{n:,}"`, used by both `build-corpus` and
+/// `tokenize`'s CLI summaries to match the Python CLIs' output shape.
+pub fn with_commas(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
+/// Load pre-extracted, pre-chunked text documents from an `extract`-produced JSONL
+/// file (one `{"text": ..., ...}` record per line) for `build-corpus --extra-jsonl`.
+/// Source-agnostic — books, extracted repo source code, anything `extract` produced —
+/// so this only ever reads the `text` field, never re-validates or re-filters it (that
+/// already happened in the `extract` run that produced the file).
+pub fn read_extra_documents(path: &Path) -> Result<Vec<String>> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut documents = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line.with_context(|| format!("reading {}", path.display()))?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(line)
+            .with_context(|| format!("parsing JSONL line in {}", path.display()))?;
+        if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
+            documents.push(text.to_string());
+        }
+    }
+    Ok(documents)
 }
 
 /// Chunks joined by a blank line — matches custom-gpt-10m's `train.txt` convention

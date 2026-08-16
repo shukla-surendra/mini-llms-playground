@@ -1,0 +1,353 @@
+#!/usr/bin/env bash
+#
+# GCE metadata startup-script. Runs as root, once, on first boot (and, unlike AWS
+# user-data, again on every restart — guarded below so repeated runs are harmless).
+# Log: /var/log/gpu-node-bootstrap.log  (tail it while the box comes up)
+#
+# Deliberately NOT fatal on failure of the optional steps: a failed corpus sync
+# should leave you with a reachable box to debug, not a box that never finishes
+# booting while the meter runs. Same philosophy as the sibling AWS module's script.
+
+set -uo pipefail
+exec > >(tee -a /var/log/gpu-node-bootstrap.log) 2>&1
+echo "=== bootstrap start $(date -Is) ==="
+
+USER_NAME=${ssh_user}
+USER_HOME=/home/${ssh_user}
+REPO_DIR="$USER_HOME/${repo_dir_name}"
+WORK_DIR="$REPO_DIR/${project_subdir}"
+MD_HDR="Metadata-Flavor: Google"
+MD="http://metadata.google.internal/computeMetadata/v1"
+
+# metadata_startup_script re-runs on every reboot (not just first boot) — GCE has no
+# built-in "ran once" guard the way AWS's cloud-init user-data does. Skip the heavy
+# setup on a restart; the systemd services installed below persist across reboots on
+# their own and don't need reinstalling.
+if [ -f "$USER_HOME/BOOTSTRAP_COMPLETE" ]; then
+  echo "BOOTSTRAP_COMPLETE already present — skipping setup, this is a restart"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- packages
+export DEBIAN_FRONTEND=noninteractive
+for i in $(seq 1 30); do
+  if apt-get update -y; then break; fi
+  echo "apt lock busy, retry $i"; sleep 10
+done
+apt-get install -y tmux jq git >/dev/null || echo "WARN: apt install failed"
+
+# gcloud ships preinstalled on GCP-published images (including the ml-images family
+# this module defaults to) — unlike the AWS module, which always has to install the
+# CLI fresh, this only needs a fallback for a non-standard image.
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "installing gcloud CLI"
+  curl -sSL https://sdk.cloud.google.com | bash -s -- --disable-prompts >/dev/null
+  export PATH="$USER_HOME/google-cloud-sdk/bin:$PATH"
+fi
+
+# ---------------------------------------------------------------- GPU sanity
+# Printed into the bootstrap log so a wrong machine type is visible before you start
+# a 20-hour run. bf16 == False means a pre-Ampere GPU — wrong box.
+nvidia-smi || echo "WARN: nvidia-smi failed — is this a GPU-attached machine type with a CUDA-capable image?"
+
+# ---------------------------------------------------------------- repo + deps
+sudo -u "$USER_NAME" -H bash <<'USERSETUP'
+set -uo pipefail
+cd "$HOME"
+
+if ! command -v uv >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/uv" ]; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.local/bin:$PATH"
+USERSETUP
+
+sudo -u "$USER_NAME" -H bash -c "
+set -uo pipefail
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+cd \"$USER_HOME\"
+if [ ! -d \"$REPO_DIR/.git\" ]; then
+  git clone --depth 50 '${repo_url}' '$REPO_DIR' || echo 'WARN: clone failed (private repo? use a deploy key)'
+fi
+if [ -d \"$WORK_DIR\" ]; then
+  cd \"$WORK_DIR\" && uv sync || echo 'WARN: uv sync failed'
+  mkdir -p data checkpoints logs
+else
+  echo \"WARN: project_subdir not found: $WORK_DIR\"
+fi
+"
+
+# ---------------------------------------------------------------- corpus
+# Ship the token files, never train.txt: re-tokenizing on an hourly GPU is money for
+# nothing, and the .bin.json sidecars are what make a tokenizer mismatch fail loudly
+# instead of training on ids that index the wrong embedding rows. Same reasoning as
+# the AWS module.
+%{ if corpus_prefix != "" ~}
+sudo -u "$USER_NAME" -H bash -c "
+gcloud storage rsync 'gs://${bucket}/${corpus_prefix}' '$WORK_DIR/data/' --recursive --only-show-errors=false \
+  && ls -la '$WORK_DIR/data/' \
+  || echo 'WARN: corpus sync failed'
+"
+%{ else ~}
+echo "corpus_prefix empty — skipping corpus sync (pull it by hand once you are on the box)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- checkpoint (resume)
+# gpt-train auto-resumes from checkpoints/<label>/latest.pt if it exists — no flag, no
+# code change. This just needs to land in the right place before the first launch.
+%{ if checkpoint_prefix != "" ~}
+sudo -u "$USER_NAME" -H bash -c "
+mkdir -p '$WORK_DIR/checkpoints'
+gcloud storage rsync 'gs://${bucket}/${checkpoint_prefix}' '$WORK_DIR/checkpoints/' --recursive --only-show-errors=false \
+  && find '$WORK_DIR/checkpoints' -name '*.pt' -exec ls -la {} \; \
+  || echo 'WARN: checkpoint sync failed'
+"
+%{ else ~}
+echo "checkpoint_prefix empty — fresh run, nothing to resume"
+%{ endif ~}
+
+# ---------------------------------------------------------------- shell env
+cat > /etc/profile.d/llm-lab.sh <<PROFILE
+export LLM_BUCKET="${bucket}"
+export LLM_WORK_DIR="$WORK_DIR"
+export CLOUDSDK_COMPUTE_ZONE="${zone}"
+export PATH="\$HOME/.local/bin:\$PATH"
+PROFILE
+chmod 0644 /etc/profile.d/llm-lab.sh
+
+# ---------------------------------------------------------------- checkpoint sync
+# What makes Spot affordable AND safe. Syncing only at the end of the run means a
+# preemption (or a crash, or a fat-fingered stop) throws away every GPU-hour so far.
+# Periodic sync caps the loss at one interval. Same mechanism as the AWS module.
+#
+# Excludes *.tmp: checkpoint.py writes a .tmp then renames it, so a sync never
+# uploads a torn latest.pt — but it would happily upload the half-written .tmp.
+%{ if checkpoint_sync_minutes > 0 ~}
+cat > /usr/local/bin/checkpoint-sync.sh <<'CKPTSYNC'
+#!/usr/bin/env bash
+set -uo pipefail
+INTERVAL_MIN=${checkpoint_sync_minutes}
+BUCKET="${bucket}"
+WORK_DIR="WORK_DIR_PLACEHOLDER"
+SSH_USER="SSH_USER_PLACEHOLDER"
+# Same prefix checkpoint_prefix pulls FROM at boot (see the "checkpoint (resume)"
+# section above) — periodic sync must write to the exact place a future resume reads
+# from, or a preempted box's newest progress is invisible to its own restart.
+CKPT_PREFIX="CKPT_PREFIX_PLACEHOLDER"
+
+sync_now() {
+  [ -n "$BUCKET" ] || return 0
+  [ -d "$WORK_DIR/checkpoints" ] || return 0
+  sudo -u "$SSH_USER" gcloud storage rsync "$WORK_DIR/checkpoints/" "gs://$BUCKET/$CKPT_PREFIX" \
+    --recursive --exclude=".*\.tmp$" --only-show-errors=false \
+    && echo "$(date -Is) [ckpt-sync] ok" \
+    || echo "$(date -Is) [ckpt-sync] FAILED"
+}
+
+# Exported so the preempt watcher can call the exact same path on interruption.
+if [ "$${1:-}" = "--once" ]; then sync_now; exit 0; fi
+
+while true; do
+  sleep $((INTERVAL_MIN * 60))
+  sync_now
+done
+CKPTSYNC
+
+sed -i "s|WORK_DIR_PLACEHOLDER|$WORK_DIR|" /usr/local/bin/checkpoint-sync.sh
+sed -i "s|SSH_USER_PLACEHOLDER|$USER_NAME|" /usr/local/bin/checkpoint-sync.sh
+sed -i "s|CKPT_PREFIX_PLACEHOLDER|%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }|" /usr/local/bin/checkpoint-sync.sh
+chmod 0755 /usr/local/bin/checkpoint-sync.sh
+
+cat > /etc/systemd/system/checkpoint-sync.service <<'UNIT'
+[Unit]
+Description=Periodically sync checkpoints to GCS
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/checkpoint-sync.sh
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now checkpoint-sync.service
+echo "checkpoint sync armed: every ${checkpoint_sync_minutes} min to gs://${bucket}/%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }"
+%{ else ~}
+echo "periodic checkpoint sync disabled (checkpoint_sync_minutes = 0)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- spot preemption
+# GCP marks a Spot VM for preemption and gives only ~30 SECONDS' notice via the
+# instance/preempted metadata key — meaningfully less than AWS's ~2 minutes, which is
+# exactly why this uses the metadata server's hanging-GET (?wait_for_change=true)
+# instead of AWS's simple poll-every-5-seconds loop: a hanging GET returns the MOMENT
+# the value flips, rather than up to one poll-interval late, buying back as much of
+# that shortened window as the mechanism allows.
+%{ if use_spot ~}
+cat > /usr/local/bin/preempt-watch.sh <<'PREEMPTWATCH'
+#!/usr/bin/env bash
+set -uo pipefail
+MD_HDR="Metadata-Flavor: Google"
+MD="http://metadata.google.internal/computeMetadata/v1"
+TMPHDRS=$(mktemp)
+ETAG=""
+
+while true; do
+  # wait_for_change blocks server-side until the value differs from what ETAG
+  # identifies (or ~60s elapses, whichever first) — this is what makes the notice
+  # near-instant rather than bounded by a fixed poll interval. The ETag identifying
+  # "the value as of last check" comes back in a response HEADER, not the body —
+  # has to be captured via -D and re-sent next loop, not derived from the HTTP
+  # status code.
+  VALUE=$(curl -s -D "$TMPHDRS" -H "$MD_HDR" \
+    "$MD/instance/preempted?wait_for_change=true&last_etag=$ETAG" 2>/dev/null)
+  ETAG=$(awk 'BEGIN{IGNORECASE=1} /^etag:/{print $2}' "$TMPHDRS" | tr -d '\r')
+
+  # A network hiccup returns empty immediately rather than blocking — without this,
+  # that turns into a hot loop instead of a wait. A real "TRUE" is never empty.
+  if [ -z "$VALUE" ]; then
+    sleep 2
+    continue
+  fi
+
+  if [ "$VALUE" = "TRUE" ]; then
+    rm -f "$TMPHDRS"
+    echo "$(date -Is) [preempt-watch] PREEMPTION NOTICE — syncing now"
+    /usr/local/bin/checkpoint-sync.sh --once
+    echo "$(date -Is) [preempt-watch] final sync done; waiting for reclaim"
+    exit 0
+  fi
+done
+PREEMPTWATCH
+
+chmod 0755 /usr/local/bin/preempt-watch.sh
+
+cat > /etc/systemd/system/preempt-watch.service <<'UNIT'
+[Unit]
+Description=Flush checkpoints to GCS on Spot preemption notice
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/preempt-watch.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now preempt-watch.service
+echo "spot preemption watcher armed (expect ~30s notice, not AWS's ~2min)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- idle watchdog
+%{ if idle_shutdown_minutes > 0 ~}
+cat > /usr/local/bin/gpu-idle-watchdog.sh <<'WATCHDOG'
+#!/usr/bin/env bash
+# Stops this instance after a sustained stretch of idle GPU.
+#
+# Why GPU utilization and not CPU: during training the CPU is often mid-range
+# (dataloader, logging), so a CPU-based alarm would kill live runs. An idle GPU is
+# the honest signal that the run finished, crashed, or never started. Same reasoning
+# as the AWS module.
+#
+# Pause it for a session:  touch ~/.no-idle-shutdown
+set -uo pipefail
+
+LIMIT_MIN=${idle_shutdown_minutes}
+THRESHOLD=${idle_gpu_threshold_pct}
+ZONE="${zone}"
+BUCKET="${bucket}"
+WORK_DIR="WORK_DIR_PLACEHOLDER"
+SSH_USER="SSH_USER_PLACEHOLDER"
+MD_HDR="Metadata-Flavor: Google"
+MD="http://metadata.google.internal/computeMetadata/v1"
+idle_min=0
+
+log() { echo "$(date -Is) [idle-watchdog] $*"; }
+
+while true; do
+  sleep 60
+
+  if [ -f "/home/$SSH_USER/.no-idle-shutdown" ]; then
+    idle_min=0
+    continue
+  fi
+
+  util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc '0-9')
+  # Unreadable GPU means "unknown", and unknown must never mean "kill the run".
+  if [ -z "$util" ]; then
+    log "could not read GPU utilization; assuming busy"
+    idle_min=0
+    continue
+  fi
+
+  if [ "$util" -le "$THRESHOLD" ]; then
+    idle_min=$((idle_min + 1))
+    log "GPU $util% idle for $idle_min/$LIMIT_MIN min"
+  else
+    [ "$idle_min" -gt 0 ] && log "GPU busy again ($util%), resetting"
+    idle_min=0
+  fi
+
+  if [ "$idle_min" -ge "$LIMIT_MIN" ]; then
+    log "idle threshold reached — syncing checkpoints then stopping"
+
+    # Reuse checkpoint-sync.sh so this lands at the exact prefix a future resume
+    # reads from (see the "checkpoint (resume)" section) — a second hardcoded path
+    # here would silently diverge from it the next time either one changes.
+    if [ -x /usr/local/bin/checkpoint-sync.sh ]; then
+      /usr/local/bin/checkpoint-sync.sh --once
+    elif [ -n "$BUCKET" ] && [ -d "$WORK_DIR/checkpoints" ]; then
+      sudo -u "$SSH_USER" gcloud storage rsync "$WORK_DIR/checkpoints/" "gs://$BUCKET/CKPT_PREFIX_PLACEHOLDER" \
+        --recursive --only-show-errors=false || log "WARN: checkpoint sync failed"
+    fi
+
+    NAME=$(curl -s -H "$MD_HDR" "$MD/instance/name")
+
+    # Prefer the API call: it stops (keeping the boot disk) regardless of what a
+    # guest-only halt might do. Fall back to a local halt if IAM says no.
+    gcloud compute instances stop "$NAME" --zone="$ZONE" --quiet \
+      || shutdown -h now
+    exit 0
+  fi
+done
+WATCHDOG
+
+sed -i "s|WORK_DIR_PLACEHOLDER|$WORK_DIR|" /usr/local/bin/gpu-idle-watchdog.sh
+sed -i "s|SSH_USER_PLACEHOLDER|$USER_NAME|" /usr/local/bin/gpu-idle-watchdog.sh
+sed -i "s|CKPT_PREFIX_PLACEHOLDER|%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }|" /usr/local/bin/gpu-idle-watchdog.sh
+chmod 0755 /usr/local/bin/gpu-idle-watchdog.sh
+
+cat > /etc/systemd/system/gpu-idle-watchdog.service <<'UNIT'
+[Unit]
+Description=Stop this instance when the GPU has been idle too long
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gpu-idle-watchdog.sh
+# on-failure, not always: a clean exit means the watchdog already issued the stop.
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now gpu-idle-watchdog.service
+echo "idle watchdog armed: stop after ${idle_shutdown_minutes} min at or below ${idle_gpu_threshold_pct}% GPU"
+%{ else ~}
+echo "idle watchdog disabled (idle_shutdown_minutes = 0)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- done
+touch "$USER_HOME/BOOTSTRAP_COMPLETE"
+chown "$USER_NAME:$USER_NAME" "$USER_HOME/BOOTSTRAP_COMPLETE"
+echo "=== bootstrap done $(date -Is) ==="

@@ -1,6 +1,38 @@
-.PHONY: help setup config presets data data-public tokenize tokenize-force benchmark benchmark-quick benchmark-sweep audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets books books-force data data-public data-legacy data-legacy-public data-all data-all-public tokenize tokenize-force tokenize-legacy tokenize-legacy-force benchmark benchmark-quick benchmark-sweep audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
+CORPUS_EXTRACTOR := $(CURDIR)/../../tools/corpus-extractor/target/release/corpus-extractor
+
+# Local folder of source books (PDF/EPUB) to extract — override on the command line
+# for a one-off, e.g. `make books BOOKS_DIR=~/some-other-folder`.
+BOOKS_DIR ?= ~/Downloads/books
+
+# gpt-data auto-picks this up (see the `data`/`data-public` targets below) the moment
+# it exists — `make books` is what creates it. Nothing to configure by hand: delete
+# data/books_staging/ to go back to an HF-only corpus, it's that simple to opt out.
+# Recursive (=), not immediate (:=): must re-check on every recipe invocation, not
+# once at Makefile-parse time, so `make books data` (books, then data, in one command)
+# sees the file books just created rather than the pre-books "doesn't exist yet" state.
+EXTRA_JSONL_FLAG = $(if $(wildcard data/books_staging/dataset.jsonl),--extra-jsonl data/books_staging/dataset.jsonl,)
+
+# Refuses to build on top of a symlinked data/ — this project owns its data
+# independently (see docs/DATA_PIPELINE.md); every sibling project's dataset is
+# different now, so a symlink here would mean silently reading or writing into
+# ANOTHER project's directory instead of this one's. Checked with a real filesystem
+# test (`-L`), not just documentation, specifically because the previous symlink here
+# almost certainly came from copy-pasting a sibling project's setup steps — a doc
+# alone doesn't stop that from happening again.
+define guard_not_symlinked
+	@if [ -L data ]; then \
+		echo "Error: data/ is a symlink ($$(readlink data)) into another project." >&2; \
+		echo "This project must own its data independently — every sibling's dataset" >&2; \
+		echo "is different now, so building on a shared symlink risks silently reading" >&2; \
+		echo "or writing the wrong project's data." >&2; \
+		echo "Remove the symlink (rm data), then re-run this target to build this" >&2; \
+		echo "project's own copy from scratch — see docs/DATA_PIPELINE.md." >&2; \
+		exit 1; \
+	fi
+endef
 
 # Refuses to start a second run against the same checkpoints/<label>/ — two concurrent
 # gpt-train processes silently race on latest.pt/best.pt and roughly halve each other's
@@ -22,9 +54,19 @@ help:
 	@echo "  make config        # show the active model config and exact parameter count"
 	@echo "  make presets       # list every size preset with its parameter count"
 	@echo ""
-	@echo "  make data          # download all datasets + build the corpus (needs HF_TOKEN for LMSYS)"
-	@echo "  make data-public   # same, but skip the gated LMSYS dataset (no token needed)"
-	@echo "  make tokenize      # build data/*.bin token files (run once per corpus change)"
+	@echo "  make books           # extract local books (BOOKS_DIR, default ~/Downloads/books) into data/books_staging/"
+	@echo "  make data            # download all HF datasets + build the corpus (needs HF_TOKEN for LMSYS)."
+	@echo "                       # auto-includes data/books_staging/ if 'make books' has already run"
+	@echo "                       # Rust (corpus-extractor build-corpus) — see 'make data-legacy' for the Python path"
+	@echo "  make data-public     # same, but skip the gated LMSYS dataset (no token needed)"
+	@echo "  make data-legacy         # Python fallback (gpt-data) for 'make data' — same output shape"
+	@echo "  make data-legacy-public  # Python fallback for 'make data-public'"
+	@echo "  make data-all        # books, then data, then tokenize — the full reproducible pipeline, one command"
+	@echo "  make data-all-public # same, HF-public-only"
+	@echo "  make tokenize        # build data/*.bin token files (run once per corpus change)."
+	@echo "                       # Rust (corpus-extractor tokenize) — see 'make tokenize-legacy' for the Python path"
+	@echo "  make tokenize-legacy       # Python fallback (gpt-tokenize) for 'make tokenize'"
+	@echo "  make tokenize-legacy-force # Python fallback for 'make tokenize-force'"
 	@echo "  make benchmark     # measure throughput + project GPU hours/cost"
 	@echo "  make audit         # corpus quality gate, run before a long training run"
 	@echo ""
@@ -63,18 +105,75 @@ config: setup
 presets: setup
 	uv run gpt-config --list
 
+# --chunk-tokens matches this project's context_length (1024) exactly, so a "1024-token
+# chunk" here really is one training window's worth once it reaches gpt-train, not an
+# estimate that drifts once real tokenization happens. --no-split: this step is purely
+# extraction — the train/test split and shuffle happen once, across ALL sources
+# together, in `data`/`data-public` below (see docs/DATA_PIPELINE.md).
+books: setup
+	$(guard_not_symlinked)
+	@mkdir -p $(BOOKS_DIR)
+	$(CORPUS_EXTRACTOR) extract \
+		--input $(BOOKS_DIR) \
+		--output data/books_staging \
+		--extensions pdf,epub \
+		--chunk-tokens 1024 \
+		--chunk-overlap 100 \
+		--no-split
+	@echo "books staged: data/books_staging/dataset.jsonl — 'make data' will include it automatically"
+
+books-force: setup
+	$(guard_not_symlinked)
+	rm -rf data/books_staging
+	$(MAKE) books
+
+# Rust path (default): corpus-extractor build-corpus downloads/parses/quality-filters
+# the registered HF datasets directly — no Python `datasets`/`huggingface_hub` needed
+# for this stage. See tools/corpus-extractor/README.md and docs/DATA_PIPELINE.md.
 data: setup
-	uv run gpt-data
+	$(guard_not_symlinked)
+	$(CORPUS_EXTRACTOR) build-corpus --data-dir data $(EXTRA_JSONL_FLAG)
 
 data-public: setup
-	uv run gpt-data --no-gated
+	$(guard_not_symlinked)
+	$(CORPUS_EXTRACTOR) build-corpus --data-dir data --no-gated $(EXTRA_JSONL_FLAG)
+
+# Python fallback path — kept for reference/cross-checking, not the default. Same
+# output shape (data/train.txt, data/test.txt, data/test_prompts.txt) as the Rust path.
+data-legacy: setup
+	$(guard_not_symlinked)
+	uv run gpt-data $(EXTRA_JSONL_FLAG)
+
+data-legacy-public: setup
+	$(guard_not_symlinked)
+	uv run gpt-data --no-gated $(EXTRA_JSONL_FLAG)
+
+# The full reproducible pipeline in one command, in the order that matters: extract
+# local sources first (nothing downloads yet), THEN build the merged/shuffled corpus
+# (downloads all registered HF datasets, pools them with the books JSONL, writes
+# data/train.txt + data/test.txt), THEN tokenize. Each stage is also independently
+# re-runnable on its own — see docs/DATA_PIPELINE.md for why they're kept separate
+# rather than one script, and what to check after each one.
+data-all: books data tokenize
+
+data-all-public: books data-public tokenize
 
 # Build data/*.bin (flat uint16 token files) once, so training never re-tokenizes
 # the corpus on a GPU billed by the hour. Skips files whose .bin is already current.
 tokenize: setup
-	uv run gpt-tokenize
+	$(guard_not_symlinked)
+	$(CORPUS_EXTRACTOR) tokenize --data-dir data
 
 tokenize-force: setup
+	$(guard_not_symlinked)
+	$(CORPUS_EXTRACTOR) tokenize --data-dir data --force
+
+tokenize-legacy: setup
+	$(guard_not_symlinked)
+	uv run gpt-tokenize
+
+tokenize-legacy-force: setup
+	$(guard_not_symlinked)
 	uv run gpt-tokenize --force
 
 # Measure real throughput and price the run BEFORE committing GPU hours.
@@ -89,6 +188,7 @@ benchmark-sweep: setup
 	uv run gpt-benchmark --sweep-batch 8,16,24,32 --warmup-min 2 --measure-min 5 --synthetic
 
 audit: setup
+	$(guard_not_symlinked)
 	uv run gpt-audit
 
 train: setup tokenize

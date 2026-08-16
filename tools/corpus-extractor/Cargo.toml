@@ -2,7 +2,7 @@
 name = "corpus-extractor"
 version = "0.1.0"
 edition = "2021"
-description = "Extract text from a folder (pdf, txt, md, rs, html, js, py) and build a token-chunked LLM training dataset (JSONL + optional plain text, train/test split)."
+description = "Extract text from a folder, or build/tokenize an LLM training corpus from Hugging Face datasets — one Rust CLI, three subcommands (extract / build-corpus / tokenize)."
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -16,6 +16,16 @@ tiktoken-rs = "0.5"
 pdf-extract = "0.7"
 html2text = "0.6"
 epub = "2.1.5"
+rayon = "1"
+hf-hub = { version = "1", features = ["blocking"], default-features = false }
+# HF parquet shards commonly use Snappy compression (and occasionally zstd/lz4/brotli)
+# — without these codec features, a compressed shard fails at read time with
+# "Disabled feature at compile time: snap" rather than a parse error, so this isn't
+# optional for real-world HF datasets.
+parquet = { version = "59", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "brotli"] }
+arrow-array = "59"
+arrow-schema = "59"
+sha2 = "0.10"
 
 [profile.release]
 opt-level = 3

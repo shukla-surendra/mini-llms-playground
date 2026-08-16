@@ -1,13 +1,37 @@
 # Dataset
 
-**Status: the corpus this project needs does not exist yet.** This file is the
-collection plan, not a description of something already built.
+## What this project's own pipeline builds today
 
-`data/` is currently a symlink to `custom-gpt-10m`'s corpus — 280M train tokens of
-chat/books/Wikipedia shared with the 10m and 50m siblings. That corpus is correctly
-sized for a ~50M model and **roughly 9x too small for this one**. What it becomes here
-is the *fine-tuning* set, not the pretraining set — see "The corpus you already have"
-below.
+`make books` + `make data`/`make data-public` (mechanics:
+[`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)) build this project's **own**
+corpus — `data/` is a real, independently-built directory now, no longer a symlink
+into `custom-gpt-10m`. Two sources, pooled and shuffled together: 7 registered
+Hugging Face datasets (registry: [`src/gpt/data/sources.py`](src/gpt/data/sources.py),
+full detail: [`docs/DATASETS.md`](docs/DATASETS.md)) plus locally-extracted books via
+[`tools/corpus-extractor`](../../tools/corpus-extractor/):
+
+| Dataset | License | Role |
+|---|---|---|
+| UltraChat 200k | MIT (derived from OpenAI outputs — check terms for commercial use) | Bulk everyday-assistant Q&A, synthetic |
+| OASST1 | Apache-2.0 | Human-phrased, sometimes messier |
+| Databricks Dolly 15k | CC BY-SA 3.0 | One example per documented task type |
+| SmolTalk | Apache-2.0 | Dialogue / reasoning / rewriting / summarization |
+| No Robots | **CC BY-NC 4.0 — non-commercial use only** | Entirely human-written |
+| GSM8K | MIT | Grade-school math — the arithmetic-gap regression check |
+| LMSYS-Chat-1M | **Gated** — needs `HF_TOKEN` + accepted terms | Casual, unfiltered real-user phrasing; skipped by `make data-public` |
+| Local books (PDF/EPUB) | Per-book, not individually verified — treat as personal/learning use only until checked | `make books`, via `corpus-extractor` |
+
+**This is the corpus the rest of this document calls "the corpus you already have"**
+(see that section below) — deliberately kept out of the pretraining mix this document
+is actually about. Read on for why, and for the separate, much larger corpus this
+project's pretraining run still needs.
+
+## Status: the pretraining corpus does not exist yet
+
+This file, from here down, is the collection plan for *that* corpus — not a
+description of something already built. The corpus above (books + the 7 datasets) is
+already real and buildable today; the 2.5B-token pretraining corpus described below is
+not.
 
 Companion docs: [`docs/GPU_TRAINING.md`](docs/GPU_TRAINING.md) for the training budget
 and the `.bin` token pipeline; [`docs/MODEL_SIZING_GUIDE.md`](docs/MODEL_SIZING_GUIDE.md)
@@ -71,10 +95,15 @@ FineWeb-Edu and Cosmopedia are ODC-By/permissive and safe to name in a public RE
 
 ## The corpus you already have
 
-The inherited 280M-token corpus (UltraChat, SmolTalk, OASST1, Dolly, No Robots, GSM8K,
-plus books/Wikipedia/repos — full detail in [`docs/DATASETS.md`](docs/DATASETS.md), with
-the registry itself in [`src/gpt/data/sources.py`](src/gpt/data/sources.py)) should
-**not** be poured into the pretraining mix.
+The corpus this project's own pipeline builds (the 7 datasets + books table at the top
+of this file — full detail in [`docs/DATASETS.md`](docs/DATASETS.md) and
+[`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md), the registry itself in
+[`src/gpt/data/sources.py`](src/gpt/data/sources.py)) should **not** be poured into the
+pretraining mix. Its real size depends on your own `make books`/`make data-all` run
+(books volume in particular varies with whatever's in `BOOKS_DIR`) — treat any specific
+token count elsewhere in this repo's docs for a *different* project's corpus (e.g. the
+50m/10m siblings' ~280M-token figure) as that project's own number, not a stand-in for
+this one's.
 
 Use it as a **fine-tuning set after pretraining**: pretrain on the 2.5B general corpus,
 then fine-tune on the chat data for an hour or two of extra GPU time. Mixing them

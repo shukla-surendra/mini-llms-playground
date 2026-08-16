@@ -38,6 +38,12 @@ def main():
                              "times to combine several extraction runs (books, "
                              "multiple repos, ...) in one build. "
                              "See docs/BOOKS_CORPUS_INTEGRATION.md.")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Worker processes for downloading+parsing sources in "
+                             "parallel (each registered source is fully independent of "
+                             "every other one). Default: os.cpu_count(), capped at the "
+                             "number of sources actually selected. --workers 1 forces "
+                             "the old fully-sequential behavior.")
     args = parser.parse_args()
 
     if args.list:
@@ -67,6 +73,7 @@ def main():
         seed=args.seed,
         skip_download=args.skip_download,
         extra_documents=extra_documents,
+        max_workers=args.workers,
     )
 
     print("\n=== Corpus built ===")

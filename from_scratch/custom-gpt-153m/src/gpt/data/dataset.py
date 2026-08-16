@@ -67,11 +67,7 @@ def tokenizer_fingerprint(tokenizer):
     tokenizer retrained at the same vocab size produces different merges, so old
     `.bin` files silently become wrong.
     """
-    ids = tokenizer.encode(
-        FINGERPRINT_PROBE,
-        allowed_special={DOCUMENT_SEPARATOR},
-        disallowed_special=(),
-    )
+    ids = tokenizer.encode(FINGERPRINT_PROBE, disallowed_special=())
     digest = hashlib.sha256(",".join(str(i) for i in ids).encode()).hexdigest()[:16]
     return {"n_vocab": int(tokenizer.n_vocab), "probe_ids": len(ids), "probe_sha256": digest}
 
@@ -93,31 +89,30 @@ def load_text(path):
 def encode_raw(tokenizer, text, device):
     """Tokenize text into one flat token stream to train over.
 
-    `allowed_special={DOCUMENT_SEPARATOR}` matters, not just `disallowed_special=()`:
-    without it, the literal string "<|endoftext|>" in the corpus (prepare.py's document
-    boundary marker) tokenizes as 7 ordinary subword pieces ("<", "|", "end", "of",
-    "text", "|", ">"), not GPT-2's real reserved special-token id — silently defeating
-    the entire point of using it as a boundary marker (confirmed empirically, not assumed:
-    encode("<|endoftext|>", disallowed_special=()) alone gives 7 tokens; adding
-    allowed_special gives the single real token id 50256). disallowed_special=() is still
-    needed too — it's what stops the tokenizer from raising on encountering the string at
-    all before allowed_special gets a chance to recognize it.
+    `disallowed_special=()` matters even though DOCUMENT_SEPARATOR (plain "\\n\\n") is
+    not itself a special token: by default tiktoken *raises* if the input text
+    contains the literal substring of any of GPT-2's real reserved special tokens
+    (e.g. an actual "<|endoftext|>" appearing inside some source document's real
+    content, unrelated to this project's own boundary marker). `disallowed_special=()`
+    means "never raise on that, just tokenize it as ordinary subword pieces" — this
+    project deliberately never invokes the special-token id path anywhere, so a
+    literal occurrence in the corpus is treated as plain text, not specially
+    recognized and not a fatal error either.
 
     Prefer `load_token_array` for anything large enough to care about — see this
     module's docstring for why this path does not scale.
     """
     return torch.tensor(
-        tokenizer.encode(text, allowed_special={DOCUMENT_SEPARATOR}, disallowed_special=()),
+        tokenizer.encode(text, disallowed_special=()),
         device=device,
     )
 
 
 def encode_chunk(tokenizer, text):
-    """`encode_raw`'s tokenizer call, without building a tensor. Same special-token
-    handling — see `encode_raw` for why both arguments are required."""
-    return tokenizer.encode(
-        text, allowed_special={DOCUMENT_SEPARATOR}, disallowed_special=()
-    )
+    """`encode_raw`'s tokenizer call, without building a tensor. Same
+    `disallowed_special=()` handling — see `encode_raw` for why it's needed even
+    though DOCUMENT_SEPARATOR isn't a special token."""
+    return tokenizer.encode(text, disallowed_special=())
 
 
 def token_bin_path(text_path):
@@ -129,21 +124,19 @@ def _split_at_document_boundary(buffer, is_final, max_buffer):
     """Return (encodable_now, carry_over).
 
     Chunking must be invisible to the tokenizer: the token stream has to come out
-    identical to tokenizing the whole file at once. Two ways a naive fixed-size read
-    breaks that, both of which cost real tokens:
+    identical to tokenizing the whole file at once. A naive fixed-size read can split
+    mid-word, which stops BPE from forming merges across the cut and costs real
+    tokens. (Measured: encoding a test corpus in 23-char chunks that way produced
+    5,418 tokens where the whole file produces 4,375 — a 24% inflation of pure noise.)
 
-      * splitting the literal `<|endoftext|>` marker, so its halves tokenize as
-        ordinary subwords instead of the single id 50256 — destroying the hard
-        document boundary the separator exists to provide;
-      * splitting mid-word, which stops BPE from forming merges across the cut.
-        (Measured: encoding a test corpus in 23-char chunks that way produced 5,418
-        tokens where the whole file produces 4,375 — a 24% inflation of pure noise.)
-
-    So we only ever cut at a document separator, carrying an incomplete tail forward
-    until one shows up. `max_buffer` bounds that carry for the pathological case of a
-    single document longer than the cap; there we cut immediately *before* a space,
-    which GPT-2's pre-tokenizer treats as a word boundary (a leading space binds to
-    the following word, so " word" stays one token).
+    So we prefer cutting at a document separator — DOCUMENT_SEPARATOR ("\\n\\n"), a
+    plain whitespace run, so a cut there can never land mid-word — carrying an
+    incomplete tail forward until one shows up. `max_buffer` bounds that carry for
+    the pathological case of a single document longer than the cap; there we cut
+    immediately *before* a space instead, which GPT-2's pre-tokenizer treats as a
+    word boundary (a leading space binds to the following word, so " word" stays one
+    token) — the same safety property as a document-separator cut, just without
+    waiting for one to appear.
     """
     if is_final:
         return buffer, ""

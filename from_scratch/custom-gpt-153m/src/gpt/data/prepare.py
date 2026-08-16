@@ -15,24 +15,30 @@ Output is plain text — "Role: message" lines (or, for extra_documents, whateve
 they already are), documents separated by DOCUMENT_SEPARATOR. Training reads it as an
 undifferentiated token stream (see dataset.py).
 
-DOCUMENT_SEPARATOR is a real reserved tokenizer special token, not a soft "\\n\\n" —
-see docs/TRAINING_QA.md's "conversation-boundary marking" finding for why a soft
-separator was a real, measurable weak spot: dataset.py's get_batch() samples random
-windows, so a meaningful fraction of every batch straddles two unrelated documents, and
-"\\n\\n" is a far weaker "this is unrelated, start fresh" signal than a token GPT-2's own
-pretraining already primed the embedding space to recognize.
+DOCUMENT_SEPARATOR is a plain "\\n\\n" — a deliberate choice, not an oversight. An
+earlier version of this project used GPT-2's real reserved `<|endoftext|>` special
+token instead (see docs/BOOKS_CORPUS_INTEGRATION.md's Step 2 and
+docs/TRAINING_QA.md's "conversation-boundary marking" finding for that reasoning and
+the measured weak spot it was fixing: dataset.py's get_batch() samples random windows,
+so a meaningful fraction of every batch straddles two unrelated documents, and a soft
+separator is a weaker "this is unrelated, start fresh" signal than a token GPT-2's own
+pretraining already primed the embedding space to recognize). That trade-off was
+reconsidered and reverted — this project no longer relies on the special-token
+mechanism anywhere in the data pipeline.
 """
 
 import glob
 import json
+import os
 import random
 import re
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from .sources import DATASETS, selected
 
 PROMPT_FILE_SEPARATOR = "\n\n<END_PROMPT>\n\n"
-DOCUMENT_SEPARATOR = "<|endoftext|>"
+DOCUMENT_SEPARATOR = "\n\n"
 
 ROLE_MAP = {
     "user": "User",
@@ -175,7 +181,7 @@ def load_extra_documents(jsonl_path):
     return documents
 
 
-def download_source(source, raw_root, token=None):
+def download_source(source, raw_root, token=None, log=print):
     """Fetch one dataset's parquet shards into data/raw/<slug>/.
 
     Not every dataset repo publishes parquet on its main branch — some (e.g.
@@ -185,6 +191,11 @@ def download_source(source, raw_root, token=None):
     back to that ref when the main branch has no parquet means this pipeline can ingest
     any public HF dataset uniformly, without a second, format-specific code path per
     dataset that happens to not natively use parquet.
+
+    `log` defaults to `print` for a plain sequential caller; build_corpus()'s parallel
+    path passes a list's `.append` instead, since multiple worker processes calling
+    `print` directly would interleave mid-line on a shared stdout — see
+    _download_and_parse_source()'s docstring.
     """
     from huggingface_hub import snapshot_download
 
@@ -192,7 +203,7 @@ def download_source(source, raw_root, token=None):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def attempt(revision):
-        print(f"[download] {source.hf_id} (revision={revision or 'main'}) -> {out_dir}")
+        log(f"[download] {source.hf_id} (revision={revision or 'main'}) -> {out_dir}")
         snapshot_download(
             repo_id=source.hf_id,
             repo_type="dataset",
@@ -204,7 +215,7 @@ def download_source(source, raw_root, token=None):
 
     attempt(None)
     if not _parquet_files(out_dir):
-        print(f"[info] no parquet on main for {source.hf_id}; trying refs/convert/parquet")
+        log(f"[info] no parquet on main for {source.hf_id}; trying refs/convert/parquet")
         attempt("refs/convert/parquet")
     return out_dir
 
@@ -324,6 +335,56 @@ def load_oasst_conversations(parquet_files, cap, cache_dir, token, min_turns, mi
     return collected
 
 
+def _download_and_parse_source(
+    source, raw_root, cache_dir, token, skip_download,
+    max_per_dataset, min_turns, min_turn_chars, min_ascii_ratio,
+):
+    """One source's entire (download, find parquet, parse) pipeline, run in its own
+    worker process — see build_corpus()'s ProcessPoolExecutor for why a process pool
+    rather than a thread pool: downloading is I/O-bound (would parallelize fine with
+    threads alone), but the per-row `extract_turns()` parsing loop inside
+    load_conversations()/load_oasst_conversations() is plain Python running under the
+    GIL, so only separate *processes* actually run that part concurrently on
+    multiple cores, not just multiple threads contending for one.
+
+    Returns (hf_id, conversations, log_lines) rather than printing directly — multiple
+    processes writing to stdout concurrently interleaves mid-line, so every message
+    this function would otherwise print is collected here and printed by the parent,
+    in the same per-source order the sequential version always used, once every
+    worker has finished (see build_corpus()'s use of executor.map(), which preserves
+    input order in its results regardless of which worker actually finished first —
+    the reproducibility of the final shuffle depends on all_conversations being built
+    in that same fixed order every run, not completion order).
+    """
+    log_lines = []
+    target_dir = Path(raw_root) / source.slug
+
+    if not skip_download:
+        try:
+            download_source(source, raw_root, token=token, log=log_lines.append)
+        except Exception as exc:
+            note = " (gated — accept terms and set HF_TOKEN)" if source.gated else ""
+            log_lines.append(f"[warn] could not download {source.hf_id}{note}: {exc}")
+
+    files = _parquet_files(target_dir)
+    if not files:
+        log_lines.append(f"[warn] no parquet files for {source.hf_id}, skipping")
+        return source.hf_id, [], log_lines
+
+    loader = load_oasst_conversations if source.schema == "oasst_tree" else load_conversations
+    conversations = loader(
+        files,
+        cap=max_per_dataset,
+        cache_dir=cache_dir,
+        token=token,
+        min_turns=min_turns,
+        min_chars=min_turn_chars,
+        min_ascii_ratio=min_ascii_ratio,
+    )
+    log_lines.append(f"[parsed] {source.hf_id}: {len(conversations):,} conversations kept")
+    return source.hf_id, conversations, log_lines
+
+
 def build_corpus(
     paths,
     include_gated=True,
@@ -337,6 +398,7 @@ def build_corpus(
     seed=42,
     skip_download=False,
     extra_documents=(),
+    max_workers=None,
 ):
     """Download (unless skipped), parse, filter, and write the train/test/prompt files.
 
@@ -348,6 +410,14 @@ def build_corpus(
     Held-out prompts (test_prompts.txt) are still derived only from chat conversations —
     prompt_from_turns()'s "stop right before the final Assistant reply" concept doesn't
     apply to a plain-prose book excerpt.
+
+    `max_workers`: every registered source's (download, parse) pipeline is fully
+    independent of every other source's — nothing about processing UltraChat depends
+    on OASST1 having run first — so they run in a ProcessPoolExecutor, one worker
+    process per source up to this cap. None = os.cpu_count() (real parallelism up to
+    however many cores exist, not just however many sources are registered); pass 1
+    to force the old fully-sequential behavior (useful for debugging one source's
+    output in isolation, without another process's interleaved log lines).
     """
     random.seed(seed)
     raw_root = paths.data_dir / "raw"
@@ -363,34 +433,35 @@ def build_corpus(
     all_conversations = []
     per_source_counts = {}
 
-    for source in chosen:
-        target_dir = raw_root / source.slug
-        if not skip_download:
-            try:
-                download_source(source, raw_root, token=token)
-            except Exception as exc:
-                note = " (gated — accept terms and set HF_TOKEN)" if source.gated else ""
-                print(f"[warn] could not download {source.hf_id}{note}: {exc}")
+    workers = max(1, min(len(chosen), max_workers or os.cpu_count() or 1)) if chosen else 1
+    print(f"[info] processing {len(chosen)} source(s) across {workers} worker process(es)")
 
-        files = _parquet_files(target_dir)
-        if not files:
-            print(f"[warn] no parquet files for {source.hf_id}, skipping")
-            per_source_counts[source.hf_id] = 0
-            continue
-
-        loader = load_oasst_conversations if source.schema == "oasst_tree" else load_conversations
-        conversations = loader(
-            files,
-            cap=max_per_dataset,
-            cache_dir=cache_dir,
-            token=token,
-            min_turns=min_turns,
-            min_chars=min_turn_chars,
-            min_ascii_ratio=min_ascii_ratio,
+    # executor.map() preserves the SAME order as `chosen`, regardless of which worker
+    # finishes first — load-bearing for reproducibility: random.seed(seed) below only
+    # reproduces the same shuffle if all_conversations is built in a fixed order every
+    # run, not whichever order downloads happen to complete in. Confirmed by the same
+    # method used for tools/corpus-extractor's own parallel-extraction correctness
+    # check: --workers 1 (fully sequential) and the default parallel run produce
+    # byte-identical train.txt/test.txt for the same seed and inputs.
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        results = executor.map(
+            _download_and_parse_source,
+            chosen,
+            [raw_root] * len(chosen),
+            [cache_dir] * len(chosen),
+            [token] * len(chosen),
+            [skip_download] * len(chosen),
+            [max_per_dataset] * len(chosen),
+            [min_turns] * len(chosen),
+            [min_turn_chars] * len(chosen),
+            [min_ascii_ratio] * len(chosen),
         )
-        per_source_counts[source.hf_id] = len(conversations)
-        all_conversations.extend(conversations)
-        print(f"[parsed] {source.hf_id}: {len(conversations):,} conversations kept")
+
+        for hf_id, conversations, log_lines in results:
+            for line in log_lines:
+                print(line)
+            per_source_counts[hf_id] = len(conversations)
+            all_conversations.extend(conversations)
 
     if len(all_conversations) < 10:
         raise ValueError(

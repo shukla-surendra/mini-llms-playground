@@ -23,6 +23,14 @@ project's training loop, not an estimate that drifts once real tokenization happ
 
 ## Features
 
+- **Parallel extraction** — each file's extract/clean/chunk/filter pipeline is fully
+  independent of every other file's, so `rayon` fans the file list out across every
+  logical CPU by default (`--threads N` to cap it). Deterministic regardless of thread
+  count: results are merged back in the same order the files were found in, so a
+  `--seed`-reproducible run stays byte-identical whether it ran on 1 thread or 16
+  (verified directly — `--threads 1` and the default parallel run produce identical
+  `dataset.jsonl` output). This is CPU-bound parsing/string work, not matrix math —
+  there's no GPU-eligible part of this pipeline to offload.
 - **7 input formats**: `.pdf`, `.epub`, `.txt`, `.md`, `.rs`, `.html`/`.htm`, `.js`, `.py`
   — pure-text formats read directly (lossy UTF-8 fallback on bad bytes), HTML/EPUB
   converted via `html2text`, PDF via pure-Rust `pdf-extract` (no `poppler`/system deps).
@@ -96,6 +104,7 @@ corpus-extractor --input ./my-notes --output out --raw-text-only
 | `--no-dedupe` | off | Skip exact-duplicate chunk removal. |
 | `--no-emit-text` | off | Skip writing the plain-text corpus alongside the JSONL. |
 | `--raw-text-only` | off | One unchunked record per file (whole cleaned text) instead of token-windowed chunks. Still passes through the quality filter, dedupe, and split stages. |
+| `--threads <N>` | `0` (rayon default: one per logical CPU) | Cap worker threads for extraction. Output is identical regardless of this value — see "Parallel extraction" above. |
 | `-h, --help` | — | Print full help. |
 | `-V, --version` | — | Print version. |
 

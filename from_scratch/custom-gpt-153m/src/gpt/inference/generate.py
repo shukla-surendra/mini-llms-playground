@@ -8,8 +8,6 @@ import re
 
 import torch
 
-from ..data.prepare import DOCUMENT_SEPARATOR
-
 _SENTENCE_END_RE = re.compile(r'[.!?][\'")\]]*(?=\s|$)')
 
 
@@ -104,7 +102,7 @@ def generate_text(
     """
     model.eval()
     ids = torch.tensor(
-        tokenizer.encode(prompt, allowed_special={DOCUMENT_SEPARATOR}, disallowed_special=()),
+        tokenizer.encode(prompt, disallowed_special=()),
         device=device,
     ).unsqueeze(0)
     ids = ids[:, -context_length:]  # cap an over-long prompt, same as the old sliding window

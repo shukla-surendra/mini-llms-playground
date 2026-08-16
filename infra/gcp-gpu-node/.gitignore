@@ -1,0 +1,18 @@
+# Terraform working dir and providers
+.terraform/
+.terraform.lock.hcl.bak
+
+# State: contains resource ids and, for some resources, secrets. Never commit it.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Real values (may hold your GCP project id, billing account id, home IP, email)
+terraform.tfvars
+*.auto.tfvars
+!terraform.tfvars.example
+
+# Saved plans
+*.tfplan
+crash.log
+crash.*.log
