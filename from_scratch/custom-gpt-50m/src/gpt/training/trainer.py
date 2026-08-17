@@ -164,6 +164,12 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
 
     attn_impl = os.getenv("ATTN_IMPL", "sdpa")
     model = TinyGPT.from_config(model_cfg, context_length=ctx_len, attn_impl=attn_impl).to(device)
+    # Untested until 2026-08-17 (see docs/GPU_TRAINING.md's "Known gaps") — opt-in via
+    # env var rather than on by default since compile adds real first-step latency and
+    # its payoff depends heavily on model/batch size; measure with `gpt-benchmark
+    # GPT_COMPILE=1` before assuming it helps a specific run.
+    if os.getenv("GPT_COMPILE") == "1":
+        model = torch.compile(model)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
     )

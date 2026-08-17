@@ -21,6 +21,7 @@ untransferable. `--eval-overhead` adds them back analytically at the projection 
 """
 
 import argparse
+import os
 import time
 
 import torch
@@ -109,6 +110,8 @@ def benchmark_one(model_cfg, train_cfg, tokens, batch_size, args, device):
     ctx_len = model_cfg.context_length
 
     model = TinyGPT.from_config(model_cfg, context_length=ctx_len, attn_impl="sdpa").to(device)
+    if os.getenv("GPT_COMPILE") == "1":
+        model = torch.compile(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr,
                                   weight_decay=train_cfg.weight_decay)
     model.train()

@@ -83,7 +83,7 @@ fi
 # the AWS module.
 %{ if corpus_prefix != "" ~}
 sudo -u "$USER_NAME" -H bash -c "
-gcloud storage rsync 'gs://${bucket}/${corpus_prefix}' '$WORK_DIR/data/' --recursive --only-show-errors=false \
+gcloud storage rsync 'gs://${bucket}/${corpus_prefix}' '$WORK_DIR/data/' --recursive \
   && ls -la '$WORK_DIR/data/' \
   || echo 'WARN: corpus sync failed'
 "
@@ -97,7 +97,7 @@ echo "corpus_prefix empty — skipping corpus sync (pull it by hand once you are
 %{ if checkpoint_prefix != "" ~}
 sudo -u "$USER_NAME" -H bash -c "
 mkdir -p '$WORK_DIR/checkpoints'
-gcloud storage rsync 'gs://${bucket}/${checkpoint_prefix}' '$WORK_DIR/checkpoints/' --recursive --only-show-errors=false \
+gcloud storage rsync 'gs://${bucket}/${checkpoint_prefix}' '$WORK_DIR/checkpoints/' --recursive \
   && find '$WORK_DIR/checkpoints' -name '*.pt' -exec ls -la {} \; \
   || echo 'WARN: checkpoint sync failed'
 "
@@ -138,7 +138,7 @@ sync_now() {
   [ -n "$BUCKET" ] || return 0
   [ -d "$WORK_DIR/checkpoints" ] || return 0
   sudo -u "$SSH_USER" gcloud storage rsync "$WORK_DIR/checkpoints/" "gs://$BUCKET/$CKPT_PREFIX" \
-    --recursive --exclude=".*\.tmp$" --only-show-errors=false \
+    --recursive --exclude=".*\.tmp$" \
     && echo "$(date -Is) [ckpt-sync] ok" \
     || echo "$(date -Is) [ckpt-sync] FAILED"
 }
@@ -305,7 +305,7 @@ while true; do
       /usr/local/bin/checkpoint-sync.sh --once
     elif [ -n "$BUCKET" ] && [ -d "$WORK_DIR/checkpoints" ]; then
       sudo -u "$SSH_USER" gcloud storage rsync "$WORK_DIR/checkpoints/" "gs://$BUCKET/CKPT_PREFIX_PLACEHOLDER" \
-        --recursive --only-show-errors=false || log "WARN: checkpoint sync failed"
+        --recursive || log "WARN: checkpoint sync failed"
     fi
 
     NAME=$(curl -s -H "$MD_HDR" "$MD/instance/name")

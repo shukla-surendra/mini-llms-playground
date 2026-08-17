@@ -22,14 +22,30 @@ resource "google_monitoring_notification_channel" "budget_email" {
   }
 }
 
+# Cloud Billing Budgets' budget_filter.projects wants "projects/<PROJECT NUMBER>",
+# not "projects/<PROJECT ID>" — the numeric identifier, not the human-readable string
+# id everything else in this module uses. Looked up rather than hardcoded so this
+# still works if project_id ever changes.
+data "google_project" "this" {
+  project_id = var.project_id
+}
+
 resource "google_billing_budget" "monthly" {
   count = var.monthly_budget_usd > 0 && var.billing_account_id != "" ? 1 : 0
 
-  billing_account = "billingAccounts/${var.billing_account_id}"
+  # google_billing_budget's `billing_account` wants the BARE account id — the
+  # provider prepends "billingAccounts/" itself when building the API request.
+  # Confirmed empirically: passing "billingAccounts/${id}" here produced a request to
+  # .../v1/billingAccounts/billingAccounts/<id>/budgets (404) on first real apply of
+  # this never-before-applied module (google provider v6.50.0).
+  billing_account = var.billing_account_id
   display_name    = "${var.project}-monthly"
 
   budget_filter {
-    projects = ["projects/${var.project_id}"]
+    # Confirmed empirically: "projects/${var.project_id}" (the string id) 400s as an
+    # invalid argument — the API silently requires the numeric project number here,
+    # unlike every other project reference in this module.
+    projects = ["projects/${data.google_project.this.number}"]
   }
 
   amount {

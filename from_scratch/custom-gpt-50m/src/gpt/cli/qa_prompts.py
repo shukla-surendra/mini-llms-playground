@@ -95,15 +95,27 @@ PROBE_CATEGORIES = frozenset(
 #: always gives the same answer, which is the honest way to see what the model most
 #: believes rather than what it happened to roll. Decoding settings, not prompt text,
 #: so these stay in code rather than moving into prompt.jsonl.
+#:
+#: no_repeat_ngram_size=3 is a hard block on repeating a 3-gram, present on every row
+#: (including greedy, whose repetition_penalty stays at 1.0 — a no-op per
+#: apply_repetition_penalty — specifically so greedy keeps showing the model's raw,
+#: un-biased belief). Without it, greedy in particular has no repetition mitigation at
+#: all and reliably mode-collapses into "the same clause, forever" once it revisits a
+#: high-probability cycle; the hard ngram block stops that without softly reweighting
+#: what greedy picks otherwise.
 SWEEP_SETTINGS = [
     ("greedy (deterministic)",
-     dict(do_sample=False, temperature=1.0, top_k=None, top_p=None, repetition_penalty=1.0)),
+     dict(do_sample=False, temperature=1.0, top_k=None, top_p=None, repetition_penalty=1.0,
+          no_repeat_ngram_size=3)),
     ("conservative  T=0.3 k=20",
-     dict(do_sample=True, temperature=0.3, top_k=20, top_p=0.9, repetition_penalty=1.1)),
+     dict(do_sample=True, temperature=0.3, top_k=20, top_p=0.9, repetition_penalty=1.1,
+          no_repeat_ngram_size=3)),
     ("default  T=0.8 k=40 p=0.9",
-     dict(do_sample=True, temperature=0.8, top_k=40, top_p=0.9, repetition_penalty=1.1)),
+     dict(do_sample=True, temperature=0.8, top_k=40, top_p=0.9, repetition_penalty=1.1,
+          no_repeat_ngram_size=3)),
     ("creative  T=1.2 k=100",
-     dict(do_sample=True, temperature=1.2, top_k=100, top_p=0.95, repetition_penalty=1.1)),
+     dict(do_sample=True, temperature=1.2, top_k=100, top_p=0.95, repetition_penalty=1.1,
+          no_repeat_ngram_size=3)),
 ]
 
 

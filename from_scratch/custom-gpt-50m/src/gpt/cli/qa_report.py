@@ -227,7 +227,12 @@ def main():
     p.add_argument("--temperature", type=float, default=0.8)
     p.add_argument("--top-k", type=int, default=40)
     p.add_argument("--top-p", type=float, default=0.9)
-    p.add_argument("--repetition-penalty", type=float, default=1.1)
+    p.add_argument("--repetition-penalty", type=float, default=1.15)
+    p.add_argument("--no-repeat-ngram-size", type=int, default=3,
+                   help="Hard-block any token that would repeat an n-gram already seen "
+                        "in the completion (0 disables). Stops literal loops "
+                        "(e.g. greedy's repetition_penalty=1.0 no-op) that repetition-penalty "
+                        "alone only discourages rather than prevents.")
     p.add_argument("--greedy", action="store_true", help="Disable sampling")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--per-category-limit", type=int, default=None,
@@ -248,6 +253,7 @@ def main():
         "max_new_tokens": args.max_new_tokens, "temperature": args.temperature,
         "top_k": args.top_k, "top_p": args.top_p,
         "repetition_penalty": args.repetition_penalty,
+        "no_repeat_ngram_size": args.no_repeat_ngram_size,
         "sampling": not args.greedy, "seed": args.seed, "device": device,
     }
 
@@ -266,7 +272,8 @@ def main():
     def ask(question, **overrides):
         opts = dict(do_sample=not args.greedy, temperature=args.temperature,
                     top_k=args.top_k, top_p=args.top_p,
-                    repetition_penalty=args.repetition_penalty)
+                    repetition_penalty=args.repetition_penalty,
+                    no_repeat_ngram_size=args.no_repeat_ngram_size)
         opts.update(overrides)
         _, answer = generate_text(
             model=model, tokenizer=tokenizer, prompt=f"User: {question}\nAssistant:",

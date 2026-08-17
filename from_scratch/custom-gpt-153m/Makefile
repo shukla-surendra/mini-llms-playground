@@ -55,6 +55,7 @@ help:
 	@echo "  make presets       # list every size preset with its parameter count"
 	@echo ""
 	@echo "  make books           # extract local books (BOOKS_DIR, default ~/Downloads/books) into data/books_staging/"
+	@echo "                       # BOOKS_THREADS (default 2) caps parallel PDF/EPUB decompression — see Makefile comment"
 	@echo "  make data            # download all HF datasets + build the corpus (needs HF_TOKEN for LMSYS)."
 	@echo "                       # auto-includes data/books_staging/ if 'make books' has already run"
 	@echo "                       # Rust (corpus-extractor build-corpus) — see 'make data-legacy' for the Python path"
@@ -110,16 +111,36 @@ presets: setup
 # estimate that drifts once real tokenization happens. --no-split: this step is purely
 # extraction — the train/test split and shuffle happen once, across ALL sources
 # together, in `data`/`data-public` below (see docs/DATA_PIPELINE.md).
+#
+# BOOKS_THREADS caps corpus-extractor's rayon pool for this stage. Left at 0 (rayon's
+# own default of one thread per logical CPU), a folder of large/scanned PDFs gets
+# several of them fully decompressed into memory at once — each pdf-extract call reads
+# the whole file (fs::read) and then unpacks page/font/image streams, which can easily
+# run several times the file's on-disk size. On a laptop with limited swap, that many
+# multi-GB extractions running concurrently exceeds physical RAM and takes down the
+# whole session, not just this process — a real incident on this machine (24GB unified
+# memory, ~3GB swap) that looked like "VSCode crashed" but was actually system-wide
+# memory pressure. Default of 2 keeps peak concurrent decompression bounded regardless
+# of core count; override per-run for a folder known to be small/text-only, e.g.
+# `make books BOOKS_THREADS=0`.
+BOOKS_THREADS ?= 2
+
 books: setup
 	$(guard_not_symlinked)
 	@mkdir -p $(BOOKS_DIR)
+	@start=$$(date +%s); \
 	$(CORPUS_EXTRACTOR) extract \
 		--input $(BOOKS_DIR) \
 		--output data/books_staging \
 		--extensions pdf,epub \
 		--chunk-tokens 1024 \
 		--chunk-overlap 100 \
-		--no-split
+		--no-split \
+		--threads $(BOOKS_THREADS); \
+	status=$$?; \
+	elapsed=$$(( $$(date +%s) - start )); \
+	printf "wall clock: %02d:%02d:%02d\n" $$((elapsed/3600)) $$((elapsed%3600/60)) $$((elapsed%60)); \
+	exit $$status
 	@echo "books staged: data/books_staging/dataset.jsonl — 'make data' will include it automatically"
 
 books-force: setup
@@ -154,9 +175,28 @@ data-legacy-public: setup
 # data/train.txt + data/test.txt), THEN tokenize. Each stage is also independently
 # re-runnable on its own — see docs/DATA_PIPELINE.md for why they're kept separate
 # rather than one script, and what to check after each one.
-data-all: books data tokenize
+#
+# Recipe (not plain prerequisites) so the elapsed-time wrapper covers the whole
+# books+data+tokenize run, not just whichever stage happens to run last — `target:
+# deps` alone has no hook that fires before the first dependency starts. Each stage
+# runs as its own $(MAKE) so a failure partway through still reports the elapsed
+# time so far before propagating the error (set -e stops at the failing stage; the
+# trap prints and re-raises).
+data-all:
+	@start=$$(date +%s); \
+	trap 'elapsed=$$(( $$(date +%s) - start )); printf "data-all wall clock: %02d:%02d:%02d\n" $$((elapsed/3600)) $$((elapsed%3600/60)) $$((elapsed%60))' EXIT; \
+	set -e; \
+	$(MAKE) books; \
+	$(MAKE) data; \
+	$(MAKE) tokenize
 
-data-all-public: books data-public tokenize
+data-all-public:
+	@start=$$(date +%s); \
+	trap 'elapsed=$$(( $$(date +%s) - start )); printf "data-all-public wall clock: %02d:%02d:%02d\n" $$((elapsed/3600)) $$((elapsed%3600/60)) $$((elapsed%60))' EXIT; \
+	set -e; \
+	$(MAKE) books; \
+	$(MAKE) data-public; \
+	$(MAKE) tokenize
 
 # Build data/*.bin (flat uint16 token files) once, so training never re-tokenizes
 # the corpus on a GPU billed by the hour. Skips files whose .bin is already current.

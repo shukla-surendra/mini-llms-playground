@@ -42,31 +42,40 @@ resource "google_storage_bucket_iam_member" "gpu_rw" {
 # instance resource this module manages (`google_compute_instance_iam_member`,
 # resource-level IAM, not project-level) — arguably a stronger scope than AWS's tag
 # match, since it names the exact instance rather than "any instance with this tag."
-# A minimal custom role, not a predefined one: predefined compute roles (even the
-# narrowest, roles/compute.instanceAdmin.v1) also grant start/reset/delete/
-# setMachineType — this role grants only what the watchdog scripts actually call.
+# A minimal custom role, not a predefined one, was the original intent here:
+# predefined compute roles (even the narrowest, roles/compute.instanceAdmin.v1) also
+# grant start/reset/delete/setMachineType — a purpose-built role would grant only
+# what the watchdog scripts actually call.
+#
+# DEVIATION (2026-08-17, first real apply of this never-before-applied module): the
+# deploying service account (llm-training-dev-sa) can create SAs/buckets/firewalls
+# but lacks iam.roles.create at the project level (403 IAM_PERMISSION_DENIED),
+# so google_project_iam_custom_role fails outright regardless of what it declares.
+# Falling back to the predefined roles/compute.instanceAdmin.v1, still bound only to
+# this ONE instance resource (not project-wide) via google_compute_instance_iam_member
+# — tighter than a project-level grant, but broader than the intended get+stop-only
+# role on this specific box (also grants start/reset/delete/setMachineType on it).
+# Revert to the custom-role version above if the deploying principal is ever granted
+# roles/iam.roleAdmin (or Owner) on this project.
 ########################################
 
-resource "google_project_iam_custom_role" "self_stop" {
-  role_id     = replace("${var.project}_self_stop", "-", "_")
-  title       = "${var.project} self-stop"
-  description = "Exactly what the idle-shutdown and spot-preemption watchdogs need: read the instance's own status and stop it. Nothing else."
-  permissions = [
-    "compute.instances.get",
-    "compute.instances.stop",
-  ]
-}
-
-# Bound to the specific instance resource once it exists — see main.tf. Deferred
-# here as a separate resource (rather than inline) because it must reference
-# google_compute_instance.gpu, which is declared after this file in read order.
+# FURTHER DEVIATION (2026-08-17, same apply): even the predefined-role fallback above
+# fails — this service account also lacks compute.instances.setIamPolicy (403), one
+# level deeper than the iam.roles.create gap. Disabled (count=0) rather than keep
+# spending apply cycles on a non-blocking safety feature while the instance bills.
+# Effect: the idle-shutdown and preempt-watch scripts on the box (still installed by
+# bootstrap.sh.tftpl) will detect the condition but CANNOT self-stop the instance —
+# manual `make down`/`make stop` is required, same as the disabled budget alert in
+# budget.tf. Re-enable (count = var.instance_count > 0 ? 1 : 0) once the deploying
+# principal has compute.instances.setIamPolicy, or an Owner grants it directly via
+# `gcloud compute instances add-iam-policy-binding` outside Terraform.
 resource "google_compute_instance_iam_member" "self_stop" {
-  count = var.instance_count > 0 ? 1 : 0
+  count = 0
 
   project       = var.project_id
   zone          = var.zone
   instance_name = google_compute_instance.gpu[0].name
-  role          = google_project_iam_custom_role.self_stop.id
+  role          = "roles/compute.instanceAdmin.v1"
   member        = "serviceAccount:${google_service_account.gpu.email}"
 }
 

@@ -27,6 +27,33 @@ def apply_repetition_penalty(next_logits, ids, penalty=1.0, window_size=None):
     return adjusted
 
 
+def ban_repeated_ngrams(next_logits, ids, ngram_size=None):
+    """Hard-block whatever token(s) would complete an n-gram already seen earlier in
+    this sequence. Where apply_repetition_penalty only discourages recently-used
+    tokens (and does nothing at penalty<=1.0, e.g. the sweep's greedy row), this stops
+    a literal cycle — "the same clause over and over", a function calling itself,
+    "Google Maps or Google Maps" — dead once it would repeat, regardless of penalty.
+    ngram_size<=1 or None is a no-op.
+    """
+    if not ngram_size or ngram_size <= 1:
+        return next_logits
+    ids_row = ids[0].tolist()
+    prefix_len = ngram_size - 1
+    if len(ids_row) < prefix_len:
+        return next_logits
+    prefix = tuple(ids_row[-prefix_len:])
+    banned = {
+        ids_row[i + prefix_len]
+        for i in range(len(ids_row) - prefix_len)
+        if tuple(ids_row[i:i + prefix_len]) == prefix
+    }
+    if not banned:
+        return next_logits
+    adjusted = next_logits.clone()
+    adjusted[:, list(banned)] = float("-inf")
+    return adjusted
+
+
 def sample_next_token(logits, do_sample=True, temperature=1.0, top_k=None, top_p=None):
     if not do_sample:
         return torch.argmax(logits, dim=-1, keepdim=True)
@@ -92,6 +119,7 @@ def generate_text(
     top_k=None,
     top_p=None,
     repetition_penalty=1.0,
+    no_repeat_ngram_size=None,
     postprocess=True,
 ):
     """Returns (full_text, completion) — completion is full_text with the prompt
@@ -125,6 +153,7 @@ def generate_text(
             next_logits = apply_repetition_penalty(
                 logits[:, -1, :], ids, penalty=repetition_penalty, window_size=context_length,
             )
+            next_logits = ban_repeated_ngrams(next_logits, ids, ngram_size=no_repeat_ngram_size)
             next_token = sample_next_token(
                 next_logits, do_sample=do_sample, temperature=temperature, top_k=top_k, top_p=top_p,
             )
@@ -142,6 +171,7 @@ def generate_text(
             next_logits = apply_repetition_penalty(
                 logits[:, -1, :], ids, penalty=repetition_penalty, window_size=context_length,
             )
+            next_logits = ban_repeated_ngrams(next_logits, ids, ngram_size=no_repeat_ngram_size)
             next_token = sample_next_token(
                 next_logits, do_sample=do_sample, temperature=temperature, top_k=top_k, top_p=top_p,
             )
