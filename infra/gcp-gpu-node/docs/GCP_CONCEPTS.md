@@ -327,3 +327,90 @@ gcloud compute instances help
 gcloud iam help
 gcloud container help
 ```
+
+## 8. Terraform state: local vs. remote, and why it matters for CI/CD
+
+State is Terraform's only record of the mapping between your `.tf` resource blocks
+and the real GCP object IDs they created (VM self-links, disk IDs, IPs, ...). `plan`,
+`apply`, and `destroy` all diff against this file, not against GCP directly — lose it,
+and Terraform assumes nothing exists yet.
+
+```
+.tf files            terraform.tfstate           GCP
+(desired state)  ↔   (Terraform's record    ↔   (actual resources)
+                      of actual state)
+```
+
+**Local backend (the default, and what this module uses):** state is a plain file,
+`terraform.tfstate`, on whatever machine runs `terraform apply`. Fine for a single
+operator running from one machine — see the comment block in `versions.tf` — but it
+has two failure modes worth knowing by name:
+
+- **No locking.** Two concurrent `apply` runs against the same local file can corrupt
+  it — there's no coordination mechanism.
+- **Single point of failure.** If the machine holding the file is lost, so is
+  Terraform's record of what it built.
+
+**In this repo:** `versions.tf` keeps state local deliberately (single-operator lab),
+with the GCS backend block commented out and ready — see that file's comment for
+exactly when to flip it on.
+
+### Why a CI/CD pipeline can't use local state at all
+
+A CI runner (GitHub Actions job, Cloud Build worker) is a fresh, ephemeral filesystem
+every run. If the local backend were used from a pipeline, each run would write
+`terraform.tfstate` onto disk that gets destroyed the instant the job ends — the next
+run starts from zero, same as a lost laptop, and `apply` tries to recreate every
+resource from scratch.
+
+```
+Run 1:  init → apply → writes terraform.tfstate → runner destroyed → state gone
+Run 2:  init → sees no state → tries to create everything again
+```
+
+### The fix: a remote backend (GCS), and why no "download/upload" step is needed
+
+Pointing `versions.tf`'s `backend "gcs" {}` block at a real bucket moves the
+source of truth off the runner entirely. Nothing needs to be fetched or saved by
+hand — it's built into the two commands the pipeline already runs:
+
+```
+terraform init    → reads current state FROM the GCS object, into memory for this run
+terraform apply   → writes updated state back TO that same GCS object before exiting
+```
+
+```
+Pipeline run N            GCS bucket (persistent)
+  init  ───────read───────►  gs://bucket/.../default.tfstate
+  apply ───────write──────►  gs://bucket/.../default.tfstate
+runner destroyed here.    state survives — it never lived on the runner.
+```
+
+GCS backend locking is native (object generation checks, no separate lock table like
+the old S3+DynamoDB pattern) — a second overlapping `apply` blocks instead of
+corrupting state.
+
+### What the CI identity needs
+
+Read/write on the state bucket specifically — via Workload Identity Federation
+(§5 above), not a long-lived service-account key. Scope the IAM binding to the bucket
+resource, not the project, same tightening principle as §3's `iam.tf` example.
+
+### Rollout steps (when this module gains a pipeline)
+
+1. Create the bucket once, with **versioning on** (gives rollback if a bad `apply`
+   corrupts state): `gsutil mb -l <region> gs://<bucket>` then
+   `gsutil versioning set on gs://<bucket>`.
+2. Uncomment the `backend "gcs" {}` block in `versions.tf`, fill in the bucket name.
+3. Run `terraform init -migrate-state` once, locally, to upload the existing local
+   `terraform.tfstate` into the bucket instead of starting history over.
+4. Grant the CI identity bucket access; pipeline steps stay
+   `terraform init && terraform plan && terraform apply` — no new commands.
+
+### Never commit state, regardless of backend
+
+`terraform.tfstate` can hold resource attributes GCP treats as sensitive (and, for
+some providers, plaintext secrets). This repo's `.gitignore` already excludes
+`*.tfstate` and `*.tfstate.*` for exactly this reason — true whether state lives
+locally or remotely; a remote backend replaces the "state gets lost" risk, not the
+"state contains sensitive data" one.

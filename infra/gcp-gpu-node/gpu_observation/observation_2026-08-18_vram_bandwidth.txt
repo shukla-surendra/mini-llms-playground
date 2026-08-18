@@ -1,0 +1,126 @@
+=== CMD 1: nvidia-smi dmon -c 15 -d 1 (15 samples, 1s apart) ===
+# gpu    pwr  gtemp  mtemp     sm    mem    enc    dec    jpg    ofa   mclk   pclk 
+# Idx      W      C      C      %      %      %      %      %      %    MHz    MHz 
+    0     35     75      -      0      0      0      0      0      0   6251   2040 
+    0     35     75      -      0      0      0      0      0      0   6251   2040 
+    0     35     75      -      0      0      0      0      0      0   6251   2040 
+    0     42     77      -     66     51      0      0      0      0   6251   1770 
+    0     71     78      -     69     53      0      0      0      0   6251   1650 
+    0     71     78      -     87     75      0      0      0      0   6251   1635 
+    0     71     78      -     85     73      0      0      0      0   6251   1590 
+    0     71     78      -     86     73      0      0      0      0   6251   1620 
+    0     72     78      -     84     72      0      0      0      0   6251   1590 
+    0     73     78      -     84     72      0      0      0      0   6251   1575 
+    0     65     76      -      7      0      0      0      0      0   6251   2025 
+    0     35     75      -      0      0      0      0      0      0   6251   2040 
+    0     35     75      -      0      0      0      0      0      0   6251   2040 
+    0     35     75      -      0      0      0      0      0      0   6251   2040 
+    0     44     77      -     86     76      0      0      0      0   6251   1650 
+
+=== CMD 2: nvidia-smi -q -d MEMORY,UTILIZATION,CLOCK ===
+
+==============NVSMI LOG==============
+
+Timestamp                                              : Tue Aug 18 12:16:15 2026
+Driver Version                                         : 580.173.02
+CUDA Version                                           : 13.0
+
+Attached GPUs                                          : 1
+GPU 00000000:00:03.0
+    FB Memory Usage
+        Total                                          : 23034 MiB
+        Reserved                                       : 471 MiB
+        Used                                           : 1946 MiB
+        Free                                           : 20618 MiB
+    BAR1 Memory Usage
+        Total                                          : 32768 MiB
+        Used                                           : 1947 MiB
+        Free                                           : 30821 MiB
+    Conf Compute Protected Memory Usage
+        Total                                          : 0 MiB
+        Used                                           : 0 MiB
+        Free                                           : 0 MiB
+    Utilization
+        GPU                                            : 81 %
+        Memory                                         : 69 %
+        Encoder                                        : 0 %
+        Decoder                                        : 0 %
+        JPEG                                           : 0 %
+        OFA                                            : 0 %
+    GPU Utilization Samples
+        Duration                                       : 14.00 sec
+        Number of Samples                              : 71
+        Max                                            : 84 %
+        Min                                            : 0 %
+        Avg                                            : 58 %
+    Memory Utilization Samples
+        Duration                                       : 14.00 sec
+        Number of Samples                              : 71
+        Max                                            : 75 %
+        Min                                            : 0 %
+        Avg                                            : 49 %
+    ENC Utilization Samples
+        Duration                                       : 14.00 sec
+        Number of Samples                              : 71
+        Max                                            : 0 %
+        Min                                            : 0 %
+        Avg                                            : 0 %
+    DEC Utilization Samples
+        Duration                                       : 14.00 sec
+        Number of Samples                              : 71
+        Max                                            : 0 %
+        Min                                            : 0 %
+        Avg                                            : 0 %
+    JPG Utilization Samples
+        Duration                                       : 14.00 sec
+        Number of Samples                              : 71
+        Max                                            : 0 %
+        Min                                            : 0 %
+        Avg                                            : 0 %
+    OFA Utilization Samples
+        Duration                                       : 14.00 sec
+        Number of Samples                              : 71
+        Max                                            : 0 %
+        Min                                            : 0 %
+        Avg                                            : 0 %
+    Clocks
+        Graphics                                       : 1695 MHz
+        SM                                             : 1695 MHz
+        Memory                                         : 6251 MHz
+        Video                                          : 1650 MHz
+    Applications Clocks
+        Graphics                                       : 2040 MHz
+        Memory                                         : 6251 MHz
+    Default Applications Clocks
+        Graphics                                       : 2040 MHz
+        Memory                                         : 6251 MHz
+    Deferred Clocks
+        Memory                                         : N/A
+    Max Clocks
+        Graphics                                       : 2040 MHz
+        SM                                             : 2040 MHz
+        Memory                                         : 6251 MHz
+        Video                                          : 1770 MHz
+    Max Customer Boost Clocks
+        Graphics                                       : 2040 MHz
+    SM Clock Samples
+        Duration                                       : Not Found
+        Number of Samples                              : Not Found
+        Max                                            : Not Found
+        Min                                            : Not Found
+        Avg                                            : Not Found
+    Memory Clock Samples
+        Duration                                       : Not Found
+        Number of Samples                              : Not Found
+        Max                                            : Not Found
+        Min                                            : Not Found
+        Avg                                            : Not Found
+    Clock Policy
+        Auto Boost                                     : N/A
+        Auto Boost Default                             : N/A
+
+
+=== CMD 3: current training step/speed (for correlation) ===
+training:  36%|███▌      | 357198/1000000 [21:40<5:07:59, 34.78step/s, batch_loss=2.9681, est_epoch=0.149, eta_h=28.6, lr=1.52e-04, test_loss=2.7711, test_ppl=16.0, total_h=15.88, train_loss=2.8770]
+training:  36%|███▌      | 357198/1000000 [21:40<5:07:59, 34.78step/s, batch_loss=3.5389, est_epoch=0.149, eta_h=28.6, lr=1.52e-04, test_loss=2.7711, test_ppl=16.0, total_h=15.88, train_loss=2.8770]
+training:  36%|███▌      | 357199/1000000 [21:40<5:07:59, 34.78step/s, batch_loss=3.3487, est_epoch=0.149, eta_h=28.6, lr=1.52e-04, test_loss=2.7711, test_ppl=16.0, total_h=15.88, train_loss=2.8770]
