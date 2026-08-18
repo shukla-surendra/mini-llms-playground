@@ -1,4 +1,4 @@
-.PHONY: help setup config presets data data-public tokenize tokenize-force benchmark benchmark-quick score audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets data data-public tokenize tokenize-force data-pretrain data-posttrain use-pretrain use-posttrain benchmark benchmark-quick score audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
 
@@ -25,6 +25,12 @@ help:
 	@echo "  make data          # download all datasets + build the corpus (needs HF_TOKEN for LMSYS)"
 	@echo "  make data-public   # same, but skip the gated LMSYS dataset (no token needed)"
 	@echo "  make audit         # corpus quality gate, run before a long training run"
+	@echo ""
+	@echo "  Two-phase training (see docs/TWO_PHASE_TRAINING.md):"
+	@echo "  make data-pretrain  # build the pretrain-profile corpus (153m-sourced raw prose)"
+	@echo "  make data-posttrain # build the posttrain-profile corpus (pure chat, no extra docs)"
+	@echo "  make use-pretrain   # switch active corpus to pretrain, re-tokenize"
+	@echo "  make use-posttrain  # switch active corpus to posttrain, re-tokenize"
 	@echo ""
 	@echo "  make train         # train in the foreground (auto-resumes from the latest checkpoint)"
 	@echo "  make train-fresh   # train from scratch, ignoring existing checkpoints"
@@ -70,6 +76,50 @@ tokenize: setup
 
 tokenize-force: setup
 	uv run gpt-tokenize --force
+
+# --- Two-phase training: pretrain (raw prose) then post-train (pure chat) -----------
+#
+# data/profiles/<name>/{train,test}.txt hold each corpus variant. `make use-<name>`
+# copies one into the canonical data/train.txt + test.txt (what gpt-train actually
+# reads) and re-tokenizes. Only one profile is "active" at a time — switching is one
+# command, nothing is silently mixed. See docs/TWO_PHASE_TRAINING.md.
+#
+#   make use-pretrain  && make train-fresh              # phase 1: base LM, from step 0
+#   make use-posttrain && GPT_STEPS=<higher> make train # phase 2: resumes phase-1
+#                                                        # weights, now on chat data
+#
+# data/profiles/pretrain/{train,test}.txt: built by scripts/build_pretrain_split.py
+# from the 5 sources copied over from custom-gpt-153m's enriched raw pool (see that
+# script's docstring — same held-out-last-1%-per-source method 153m itself used).
+data-pretrain: setup
+	uv run python scripts/build_pretrain_split.py
+	@mkdir -p data/profiles/pretrain
+	@mv data/train.txt data/profiles/pretrain/train.txt
+	@mv data/test.txt data/profiles/pretrain/test.txt
+
+# data/profiles/posttrain/{train,test}.txt: pure chat, no books/repos/wikipedia —
+# gpt-data with no --extra-jsonl, reusing the 7 chat sources already in data/raw/.
+data-posttrain: setup
+	uv run gpt-data --skip-download
+	@mkdir -p data/profiles/posttrain
+	@mv data/train.txt data/profiles/posttrain/train.txt
+	@mv data/test.txt data/profiles/posttrain/test.txt
+	@mv data/test_prompts.txt data/profiles/posttrain/test_prompts.txt
+
+use-pretrain:
+	@test -f data/profiles/pretrain/train.txt || (echo "Run 'make data-pretrain' first." >&2; exit 1)
+	cp data/profiles/pretrain/train.txt data/train.txt
+	cp data/profiles/pretrain/test.txt data/test.txt
+	$(MAKE) tokenize-force
+	@echo "Active corpus: pretrain (data/profiles/pretrain/)"
+
+use-posttrain:
+	@test -f data/profiles/posttrain/train.txt || (echo "Run 'make data-posttrain' first." >&2; exit 1)
+	cp data/profiles/posttrain/train.txt data/train.txt
+	cp data/profiles/posttrain/test.txt data/test.txt
+	-cp data/profiles/posttrain/test_prompts.txt data/test_prompts.txt
+	$(MAKE) tokenize-force
+	@echo "Active corpus: posttrain (data/profiles/posttrain/)"
 
 # Measure real throughput and project GPU hours/cost before renting anything.
 benchmark: setup

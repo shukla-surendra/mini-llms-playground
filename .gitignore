@@ -1,6 +1,6 @@
 # OS / editor
 .DS_Store
-
+archive
 # Python
 __pycache__/
 *.py[cod]
@@ -50,6 +50,7 @@ data/test_prompts.txt
 # No trailing slash: these are a real directory in some projects and a symlink to a
 # shared corpus in others, and a trailing slash would only match the directory form.
 from_scratch/*/data
+from_scratch/_shared_data
 fine_tuning/*/data
 base_models/*/data
 # Token files built by `gpt-tokenize`, wherever they land.

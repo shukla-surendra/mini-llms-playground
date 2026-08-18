@@ -131,6 +131,25 @@ DATASETS = (
         ),
         tags=("multi-turn", "real-user", "gated", "unfiltered"),
     ),
+    DatasetSource(
+        hf_id="teknium/OpenHermes-2.5",
+        name="OpenHermes 2.5",
+        gated=False,
+        schema="conversation",
+        summary=(
+            "~1M synthetic instruction/conversation examples pooled from many "
+            "GPT-4-generated sources (Airoboros, CamelAI, CodeAlpaca, Evol-Instruct, "
+            "Orca, and others). ShareGPT-style schema — a `conversations` list of "
+            "{'from': 'human'|'gpt', 'value': ...} dicts — matches this project's "
+            "existing generic conversation parser and its 'human'/'gpt' role aliases "
+            "exactly, no new parsing code needed. Broader topic/style diversity than "
+            "UltraChat or SmolTalk (this corpus's other two synthetic sources), added "
+            "specifically as a second large, distinct synthetic pool rather than more "
+            "volume from the same two."
+        ),
+        license_note="Compiled dataset is openly licensed; check individual source subsets for their own terms.",
+        tags=("multi-turn", "synthetic", "instruction-following"),
+    ),
 )
 
 PUBLIC_DATASETS = tuple(d for d in DATASETS if not d.gated)
