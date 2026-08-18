@@ -1,0 +1,57 @@
+# Copy this to terraform.tfvars and fill in the two required values below.
+# cp terraform.tfvars.example terraform.tfvars
+
+# ---- required, no sensible default ---------------------------------------
+project_id = "REPLACE_ME"    # `gcloud config get-value project`, or console -> project picker
+
+# ---- identity / region -----------------------------------------------------
+region  = "us-central1"
+zone    = "us-central1-a"
+project = "mini-llm-gpu"
+
+# ---- compute ---------------------------------------------------------------
+machine_type   = "g2-standard-24" # 2x L4 24GB each, bf16 + TF32 — see variables.tf before changing
+root_volume_gb = 100
+
+# On-demand: no preemption risk, so no periodic-checkpoint-sync requirement — but
+# checkpoint_sync_minutes below stays on anyway, cheap insurance against a
+# fat-fingered `make down` or a training crash mid-run.
+use_spot = false
+
+# ---- access ------------------------------------------------------------------
+public_key_path      = "~/.ssh/id_ed25519.pub"
+ssh_private_key_path = "~/.ssh/id_ed25519"
+ssh_user             = "gpu"
+
+# Leave empty to auto-detect your current public IP as a /32. Re-run `terraform
+# apply` after your ISP rotates it, or rely on `make iap-ssh` instead (works
+# regardless of your IP — see enable_iap_ssh below).
+allowed_ssh_cidrs = []
+allow_open_ssh    = false
+enable_iap_ssh    = true
+
+# ---- storage / bootstrap ----------------------------------------------------
+create_bucket = true
+
+repo_url       = "https://github.com/shukla-surendra/mini-llms-playground.git"
+project_subdir = "from_scratch/custom-gpt-50m"
+
+# Uploaded by `make upload-corpus` (data/*.bin + *.bin.json) and pulled into
+# <project_subdir>/data at boot.
+corpus_prefix = "50m/corpus/"
+
+# Uploaded by `make upload-checkpoint` (checkpoints/50m/*.pt) and pulled into
+# <project_subdir>/checkpoints at boot — this is what makes gpt-train resume from
+# wherever the last run left off instead of starting over.
+checkpoint_prefix = "50m/checkpoints/"
+
+# ---- cost guards -------------------------------------------------------------
+checkpoint_sync_minutes = 10
+
+# An idle GPU here means the resumed run finished, crashed, or was never started —
+# none worth paying for. Pause it on the box: touch ~/.no-idle-shutdown
+idle_shutdown_minutes = 15
+
+monthly_budget_usd = 30
+billing_account_id = "" # REPLACE ME if monthly_budget_usd > 0 — `gcloud billing accounts list`
+# budget_alert_email = "you@example.com"

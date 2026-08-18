@@ -7,6 +7,27 @@ rather than writing a new doc per snapshot. Numbers below were pulled directly f
 each project's `gpt-config`, checkpoint metadata, and `data/train.bin.json` fingerprint
 on 2026-08-17 — not estimated.
 
+## Terminology: raw data vs. corpus vs. tokenized corpus
+
+Three distinct stages, each with its own name in this codebase's docs — worth being
+precise about since "corpus" gets used a lot below and means something narrower than
+"raw data":
+
+1. **Raw sources** (`data/raw/<source>/text.txt` or parquet) — exactly what got fetched
+   from HuggingFace, one folder per dataset, untouched and unmixed, no train/test split.
+   A reusable pool, not something anything trains on directly.
+2. **Corpus** (`data/train.txt` + `data/test.txt`) — the *assembled, split, train-ready*
+   plain text: raw sources concatenated (documents joined by `\n\n` or `<|endoftext|>`),
+   split into train/test at document boundaries. This is what "corpus" means everywhere
+   in this file and in each project's own `DATASET.md` — a distinct, derived artifact,
+   not the raw pool itself (which is usually larger).
+3. **Tokenized corpus** (`data/train.bin` + `data/test.bin`) — the corpus converted to
+   token ids, flat `uint16` arrays. This is what `get_batch()` actually memory-maps and
+   samples random windows from during training — not the `.txt` corpus directly.
+
+The "Corpus (tokens)" column in the table below refers to stage 3 (what's actually
+tokenized and trainable today) unless a section explicitly says otherwise.
+
 ## Shared raw data
 
 `from_scratch/_shared_data/raw/` (gitignored) holds the raw fetched sources — pretraining
