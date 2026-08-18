@@ -53,6 +53,13 @@ from_scratch/*/data
 from_scratch/_shared_data
 fine_tuning/*/data
 base_models/*/data
+# custom-gpt-nano's data/ is a hand-written, ~5KB bundled corpus that IS meant to be
+# committed (the whole point of that project is "no download needed") — unlike every
+# other project's data/ (downloaded/generated, intentionally excluded just above).
+# Un-ignore the directory itself, then the one file inside it — negating just the file
+# doesn't work while git still treats the parent directory as excluded.
+!from_scratch/custom-gpt-nano/data
+!from_scratch/custom-gpt-nano/data/corpus.txt
 # Token files built by `gpt-tokenize`, wherever they land.
 *.bin
 logs
