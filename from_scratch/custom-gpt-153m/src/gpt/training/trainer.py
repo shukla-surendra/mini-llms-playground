@@ -51,6 +51,15 @@ def format_eta(remaining_steps, steps_per_hour):
     return hours, finish.strftime("%a %d %b %H:%M")
 
 
+def hours_for_tokens(remaining_tokens, tokens_per_hour):
+    """Return a token-rate ETA, or None before enough work has been measured."""
+    if remaining_tokens <= 0:
+        return 0.0
+    if tokens_per_hour <= 0:
+        return None
+    return remaining_tokens / tokens_per_hour
+
+
 def lr_for_step(step_idx, train_cfg):
     """Linear warmup, then cosine decay to min_lr."""
     warmup_steps = max(200, int(train_cfg.steps * 0.02))
@@ -206,6 +215,7 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
     done_hours = state["total_training_seconds"] / 3600.0
     if done_steps > 0 and done_hours > 0:
         rate = done_steps / done_hours
+        token_rate = state["processed_tokens"] / done_hours
         eta = format_eta(train_cfg.steps - done_steps, rate)
         if eta:
             hours, finish = eta
@@ -218,6 +228,9 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
                 f"ETA: {hours:,.1f} more training-hours "
                 f"({hours / 24:.1f} days) -> ~{finish} if run continuously"
             )
+        epoch_eta = hours_for_tokens(len(train_tokens) - state["processed_tokens"], token_rate)
+        if epoch_eta is not None:
+            print(f"ETA to epoch 1: {epoch_eta:,.1f} more training-hours")
 
     return _run_loop(
         model=model,
@@ -392,6 +405,8 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
+            token_rate = state["processed_tokens"] / max(elapsed() / 3600.0, 1e-9)
+            epoch_eta = hours_for_tokens(len(train_tokens) - state["processed_tokens"], token_rate)
             postfix = {
                 "batch_loss": f"{loss.item():.4f}",
                 "est_epoch": f"{state['processed_tokens'] / len(train_tokens):.3f}",
@@ -399,6 +414,7 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
                 "total_h": f"{elapsed() / 3600.0:.2f}",
                 "eta_h": (f"{(train_cfg.steps - step) / max(step / max(elapsed() / 3600.0, 1e-9), 1e-9):.1f}"
                           if step > 0 and elapsed() > 0 else "?"),
+                "epoch1_eta_h": (f"{epoch_eta:.1f}" if epoch_eta is not None else "?"),
             }
             if latest_metrics:
                 postfix.update(latest_metrics)

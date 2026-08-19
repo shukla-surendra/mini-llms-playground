@@ -299,7 +299,7 @@ eval: setup
 	uv run gpt-eval $(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
 
 test: setup
-	uv run gpt-qa-report $(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
+	uv run gpt-qa-report $(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),) $(QA_ARGS)
 
 clean:
 	rm -rf checkpoints logs

@@ -1,0 +1,6 @@
+{"category":"Everyday assistant","kind":"mirror","prompt":"What are three simple ways to stay productive while working from home?"}
+{"category":"Math and logic","kind":"probe","prompt":"A recipe needs 3 cups of flour for 12 cookies. How much flour is needed for 20 cookies? Show the calculation."}
+{"category":"Programming","kind":"probe","prompt":"Show a small Python function that returns the largest value in a list, and explain an empty-list edge case."}
+{"category":"Writing","kind":"probe","prompt":"Rewrite this sentence to be clearer: The deployment, which had several issues, was done by the team yesterday."}
+{"category":"Knowledge","kind":"probe","prompt":"What is photosynthesis? Explain it for a student."}
+{"category":"Instruction following","kind":"sweep","prompt":"Answer using exactly three bullets: Give ways to reduce household energy use."}

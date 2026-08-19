@@ -1,0 +1,4 @@
+{"category":"Long explanation","kind":"probe","prompt":"Explain how a web browser loads a page after a user enters a URL. Cover DNS, HTTPS, the server response, and rendering. Use short sections."}
+{"category":"Long planning","kind":"probe","prompt":"Create a seven-day study plan for a beginner learning Python for one hour per day. Include goals, exercises, and a small project by the end."}
+{"category":"Long coding","kind":"probe","prompt":"Explain how to debug a slow SQL query on a large table. Discuss query plans, indexes, filtering, joins, and measurement."}
+{"category":"Long reasoning","kind":"probe","prompt":"Explain the trade-off between batch size, gradient accumulation, GPU memory, and training throughput for a language model."}

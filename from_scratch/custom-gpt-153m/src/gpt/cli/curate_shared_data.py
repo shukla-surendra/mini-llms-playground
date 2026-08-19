@@ -4,7 +4,7 @@ Input files are discovered recursively under --input-dir. Supported source forma
 JSONL, JSON arrays, CSV, Parquet, and plain UTF-8 text. Outputs are separate from the
 active data/train.txt so review is explicit before replacing a training corpus.
 """
-import argparse, csv, hashlib, json, random
+import argparse, csv, hashlib, json, os, sqlite3
 from collections import Counter
 from pathlib import Path
 
@@ -30,12 +30,18 @@ def rows(path):
     elif suffix == ".csv":
         with path.open(encoding="utf-8", newline="") as f: yield from csv.DictReader(f)
     elif suffix == ".parquet":
-        from datasets import load_dataset
-        yield from load_dataset("parquet", data_files=str(path), split="train")
+        # Do not use datasets.load_dataset() here: it builds a complete Arrow cache
+        # for each shard, which can exceed laptop memory on downloaded HF corpora.
+        import pyarrow.parquet as pq
+        parquet = pq.ParquetFile(path)
+        for batch in parquet.iter_batches(batch_size=1_024):
+            yield from batch.to_pylist()
     else:
         with path.open(encoding="utf-8", errors="replace") as f:
-            text = f.read()
-        yield {"text": text}
+            # Plain-text corpora can be huge too; one line/document at a time keeps
+            # curation bounded rather than materialising a whole file in RAM.
+            for text in f:
+                yield {"text": text}
 
 
 def document(row, min_chars, ascii_ratio):
@@ -65,7 +71,15 @@ def main():
     if not files: raise FileNotFoundError(f"No supported files under {args.input_dir}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     train, test = args.output_dir / "train.txt", args.output_dir / "test.txt"
-    stats, seen, written = Counter(), set(), 0
+    # Exact deduplication must not keep millions of SHA-256 strings in RAM. SQLite
+    # provides a disk-backed set with a unique primary key and is in Python's stdlib.
+    seen_path = args.output_dir / ".curation_seen.sqlite"
+    seen_path.unlink(missing_ok=True)
+    seen_db = sqlite3.connect(seen_path)
+    seen_db.execute("PRAGMA journal_mode=OFF")
+    seen_db.execute("PRAGMA synchronous=OFF")
+    seen_db.execute("CREATE TABLE seen (digest TEXT PRIMARY KEY)")
+    stats, written = Counter(), 0
     with train.open("w", encoding="utf-8") as tr, test.open("w", encoding="utf-8") as te:
         for path in files:
             for row in rows(path):
@@ -73,15 +87,23 @@ def main():
                 text = document(row, args.min_chars, args.min_ascii_ratio)
                 if not text: stats["rejected"] += 1; continue
                 digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                if digest in seen: stats["duplicates"] += 1; continue
-                seen.add(digest)
+                try:
+                    seen_db.execute("INSERT INTO seen VALUES (?)", (digest,))
+                except sqlite3.IntegrityError:
+                    stats["duplicates"] += 1; continue
                 # Stable hash split prevents train/test leakage and is reproducible.
                 target = te if int(digest[:16], 16) / 2**64 < args.test_fraction else tr
                 if target.tell(): target.write(DOCUMENT_SEPARATOR)
                 target.write(text)
                 written += 1; stats["documents"] += 1; stats["characters"] += len(text)
+                if written % 10_000 == 0:
+                    seen_db.commit()
+                    print(f"curated {written:,} documents", flush=True)
                 if args.max_docs and written >= args.max_docs: break
             if args.max_docs and written >= args.max_docs: break
+    seen_db.commit()
+    seen_db.close()
+    seen_path.unlink(missing_ok=True)
     manifest = {"input_dir": str(args.input_dir), "files": [str(f) for f in files], "stats": dict(stats),
                 "test_fraction": args.test_fraction, "separator": repr(DOCUMENT_SEPARATOR)}
     (args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

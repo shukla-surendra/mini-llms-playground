@@ -50,6 +50,10 @@ data/test_prompts.txt
 # No trailing slash: these are a real directory in some projects and a symlink to a
 # shared corpus in others, and a trailing slash would only match the directory form.
 from_scratch/*/data
+# Curated QA prompt suites are hand-written test fixtures, not downloaded corpora.
+!from_scratch/custom-gpt-153m/data/
+!from_scratch/custom-gpt-153m/data/prompt_sets/
+!from_scratch/custom-gpt-153m/data/prompt_sets/*.jsonl
 from_scratch/_shared_data
 fine_tuning/*/data
 base_models/*/data

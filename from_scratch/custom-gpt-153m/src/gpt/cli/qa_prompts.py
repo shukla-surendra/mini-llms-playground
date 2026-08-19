@@ -27,7 +27,7 @@ from pathlib import Path
 DEFAULT_PROMPTS_FILE = Path("data") / "prompt.jsonl"
 
 
-def _load(path):
+def load_categories(path=DEFAULT_PROMPTS_FILE):
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(
@@ -53,7 +53,11 @@ def _load(path):
     return categories, category_source_hf_id
 
 
-_categories, CATEGORY_SOURCE_HF_ID = _load(DEFAULT_PROMPTS_FILE)
+if DEFAULT_PROMPTS_FILE.exists():
+    _categories, CATEGORY_SOURCE_HF_ID = load_categories(DEFAULT_PROMPTS_FILE)
+else:
+    # qa_report may be invoked with --prompts-file on a fresh checkout.
+    _categories, CATEGORY_SOURCE_HF_ID = {}, {}
 
 #: (category label, [prompts]) — same shape qa_report.py has always consumed.
 QA_CATEGORIES = list(_categories.items())

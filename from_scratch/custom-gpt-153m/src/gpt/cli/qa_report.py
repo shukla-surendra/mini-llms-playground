@@ -20,17 +20,17 @@ from ..config import load_settings
 from ..data.sources import DATASETS
 from ..inference import generate_text
 from ..runtime import get_device
-from .qa_prompts import CATEGORY_SOURCE_HF_ID, QA_CATEGORIES
+from .qa_prompts import load_categories
 
 
-def _active_categories(data_dir):
+def _active_categories(data_dir, prompt_categories, prompt_sources):
     """QA_CATEGORIES filtered to sources actually present in data/raw/ — so a report
     never claims to test a dataset flavor that wasn't in this checkpoint's training
     corpus (relevant for the gated LMSYS-Chat-1M set, skipped by `make data-public`)."""
     sources_by_id = {ds.hf_id: ds for ds in DATASETS}
     active, skipped = [], []
-    for category, questions in QA_CATEGORIES:
-        hf_id = CATEGORY_SOURCE_HF_ID.get(category)
+    for category, questions in prompt_categories.items():
+        hf_id = prompt_sources.get(category)
         if hf_id is None:
             active.append((category, questions))
             continue
@@ -137,7 +137,9 @@ def main():
                               "latest/final if best.pt doesn't exist yet). Use 'latest' "
                               "to see current training state when best.pt has gone stale "
                               "relative to a recent, non-regressive change (e.g. a corpus "
-                              "rebuild) rather than a real regression.")
+                             "rebuild) rather than a real regression.")
+    parser.add_argument("--prompts-file", default="data/prompt.jsonl",
+                        help="JSONL suite to run (category, kind, prompt per line)")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -158,7 +160,8 @@ def main():
         "sampling": not args.greedy,
     }
 
-    categories, skipped = _active_categories(paths.data_dir)
+    prompt_categories, prompt_sources = load_categories(args.prompts_file)
+    categories, skipped = _active_categories(paths.data_dir, prompt_categories, prompt_sources)
     if args.per_category_limit:
         categories = [(c, qs[: args.per_category_limit]) for c, qs in categories]
 
