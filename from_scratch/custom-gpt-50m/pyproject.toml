@@ -28,6 +28,16 @@ gpt-eval = "gpt.cli.evaluate:main"
 gpt-score = "gpt.cli.score:main"
 gpt-judge = "gpt.cli.judge:main"
 gpt-qa-report = "gpt.cli.qa_report:main"
+gpt-export-vllm = "gpt.cli.export_vllm:main"
+
+[project.optional-dependencies]
+# Kept out of the training dependency set: vLLM is Linux/CUDA-specific and is only
+# needed to export and serve an already-trained checkpoint.
+vllm = [
+    "transformers>=4.46,<6",
+    "safetensors>=0.4",
+    "vllm>=0.11",
+]
 
 [build-system]
 requires = ["hatchling"]

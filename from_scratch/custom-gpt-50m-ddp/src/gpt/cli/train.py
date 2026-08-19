@@ -54,7 +54,7 @@ def main():
     else:
         device = get_device()
 
-    model_cfg, train_cfg, paths, label = load_settings(args.preset)
+    model_cfg, train_cfg, paths, label = load_settings(args.preset, world_size=world_size)
     resume = not args.no_resume and os.getenv("RESUME_TRAINING", "1") == "1"
     try:
         run_training(model_cfg, train_cfg, paths, label, resume=resume, device=device,

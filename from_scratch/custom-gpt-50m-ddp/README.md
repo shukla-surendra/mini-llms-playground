@@ -212,6 +212,28 @@ RESUME_TRAINING=0 make train
 Use this when you deliberately want to discard progress and retrain from step 0 under the
 same label — otherwise `make train` always continues where the last run left off.
 
+### Keep the same training budget when changing batch size
+
+By default, the run stops after `GPT_STEPS` micro-batches. Because each micro-batch
+contains `batch_size × context_length` tokens (and one such batch per DDP rank), that
+means changing `GPT_BATCH_SIZE` also changes the total data budget.
+
+Set `GPT_TARGET_TOKENS` to make the trainer calculate the matching step count instead:
+
+```bash
+# Both commands train for 1.024B tokens on one GPU at context_length=1024.
+GPT_BATCH_SIZE=1 GPT_GRAD_ACCUM=32 GPT_TARGET_TOKENS=1024000000 make train-fresh
+GPT_BATCH_SIZE=4 GPT_GRAD_ACCUM=8  GPT_TARGET_TOKENS=1024000000 make train-fresh
+```
+
+The first configuration resolves to 1,000,000 steps; the second resolves to 250,000.
+`GPT_TARGET_TOKENS` takes precedence over `GPT_STEPS`, and `gpt-config` prints the
+derived count before you start. Keep `batch × grad_accum` unchanged (for example,
+`1×32` and `4×8`) when you want the same effective batch per optimizer update.
+When switching batch size under a token target, start a fresh run (`make train-fresh`)
+rather than resuming a checkpoint made with the old batch size: checkpoint step numbers
+refer to old micro-batches, while the target derives new micro-step counts.
+
 See [Chapter 27 — Checkpointing and Resuming Training](../../docs/llm-engineering/27_checkpointing_and_resuming_training.md)
 for why this is safe (atomic saves, self-describing checkpoints) and
 [docs/MIGRATION.md](docs/MIGRATION.md) for resuming on a *different* machine.

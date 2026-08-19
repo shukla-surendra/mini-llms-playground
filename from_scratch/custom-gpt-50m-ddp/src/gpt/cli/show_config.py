@@ -42,7 +42,14 @@ def print_active(model_cfg, train_cfg, paths, label):
         f"= effective batch {train_cfg.batch_size * train_cfg.grad_accum_steps}"
     )
     print(f"  lr={train_cfg.lr} -> min_lr={train_cfg.min_lr} (warmup + cosine decay)")
-    print(f"  steps={train_cfg.steps:,}  eval_interval={train_cfg.eval_interval}")
+    if train_cfg.target_tokens is None:
+        print(f"  steps={train_cfg.steps:,}  (explicit step budget)")
+    else:
+        print(
+            f"  target_tokens={train_cfg.target_tokens:,}  -> steps={train_cfg.steps:,} "
+            "(derived for this batch/context/world size)"
+        )
+    print(f"  eval_interval={train_cfg.eval_interval}")
     print()
     print("paths:")
     print(f"  corpus:      {paths.train_data} / {paths.test_data}")

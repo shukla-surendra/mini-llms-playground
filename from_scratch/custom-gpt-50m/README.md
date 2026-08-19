@@ -342,6 +342,30 @@ is detected and refused rather than silently corrupting a run.
 Saves are atomic (write to `.tmp`, then rename), so interrupting training cannot leave a
 truncated checkpoint behind.
 
+## vLLM serving without changing training or resume
+
+`make export-vllm` converts one native checkpoint into a separate Hugging Face GPT-2
+directory that vLLM can serve. The conversion maps every weight exactly, retains this
+model's learned absolute position embeddings, pre-normalization, tied input/output
+embedding, and exact `nn.GELU()` activation. It also performs a native-versus-exported
+logit-parity check before writing the export.
+
+```bash
+make export-vllm
+# Prints a directory such as exports/vllm/50m/best-step-123400
+
+make serve-vllm VLLM_MODEL_DIR=exports/vllm/50m/best-step-123400
+```
+
+The first command installs the optional CUDA/Linux vLLM dependencies and reads only a
+checkpoint. It never modifies `checkpoints/<label>/`, including `latest.pt` and its
+optimizer state, so normal `make train` resume behavior is unchanged. Export directories
+are immutable and include the source step, allowing an exported snapshot to coexist with
+a later resumed training run. Use `gpt-export-vllm --checkpoint latest` when you
+explicitly want a snapshot of the latest resumable state. The serving target forces
+vLLM's Transformers backend, which loads the exported standard `GPT2LMHeadModel` with
+the exact architecture settings recorded in its `config.json`.
+
 ## Monitoring a long run
 
 - `logs/train_eval_history_<label>.csv` — train/test loss, perplexity, tokens, wall-clock,

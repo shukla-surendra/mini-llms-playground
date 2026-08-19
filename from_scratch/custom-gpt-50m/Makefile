@@ -1,4 +1,4 @@
-.PHONY: help setup config presets data data-public tokenize tokenize-force data-pretrain data-posttrain use-pretrain use-posttrain benchmark benchmark-quick score audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets data data-public tokenize tokenize-force data-pretrain data-posttrain use-pretrain use-posttrain benchmark benchmark-quick score audit train train-fresh train-bg train-status train-stop train-logs infer serve export-vllm serve-vllm eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
 
@@ -39,6 +39,8 @@ help:
 	@echo "  make train-stop    # stop a background run gracefully (SIGINT, saves latest.pt)"
 	@echo "  make infer         # generate from the trained checkpoint"
 	@echo "  make serve         # FastAPI server on :8000"
+	@echo "  make export-vllm   # export a checkpoint as an equivalent vLLM/HF GPT-2 model"
+	@echo "  make serve-vllm VLLM_MODEL_DIR=exports/vllm/50m/best-step-<N>"
 	@echo "  make eval          # heuristic generation-quality report"
 	@echo "  make test          # run the curated QA prompt set, render an HTML report"
 	@echo "  make clean         # remove checkpoints and logs (data/ is left alone)"
@@ -183,6 +185,19 @@ infer: setup
 
 serve: setup
 	uv run gpt-serve --reload
+
+# Reads a checkpoint and writes exports/vllm/<label>/<checkpoint>-step-<N>/.
+# It never changes checkpoints/<label>/, so native `make train` resume remains intact.
+export-vllm:
+	uv sync --extra vllm
+	uv run --extra vllm gpt-export-vllm
+
+# `make export-vllm` prints the immutable directory to pass as VLLM_MODEL_DIR.
+# Extra flags such as --port 8001 can be supplied through VLLM_ARGS.
+serve-vllm:
+	@test -n "$(VLLM_MODEL_DIR)" || (echo "Set VLLM_MODEL_DIR to an export directory." >&2; exit 2)
+	uv sync --extra vllm
+	uv run --extra vllm vllm serve "$(VLLM_MODEL_DIR)" --model-impl transformers $(VLLM_ARGS)
 
 eval: setup
 	uv run gpt-eval

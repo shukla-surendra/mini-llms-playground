@@ -12,6 +12,7 @@ hardcodes a dimension.
 """
 
 from dataclasses import dataclass, replace
+import math
 import os
 from pathlib import Path
 
@@ -98,6 +99,11 @@ class TrainConfig:
     weight_decay: float = 0.1
     grad_clip_norm: float = 1.0
     steps: int = 1_000_000
+    # Optional primary training budget. When set, `steps` is derived from this value
+    # and the active batch/context/world-size, so changing micro-batch size does not
+    # silently change how many tokens the model sees. `None` preserves the legacy,
+    # explicit-step budget above.
+    target_tokens: int | None = None
     # 50 -> 200: on MPS, estimate_loss's 40 forward passes (eval_batches*2) cost ~30ms/step
     # amortized at eval_interval=50 -- ~20% of total step time on an M4 Pro, measured directly
     # against an idle GPU. Telemetry-only change: doesn't touch the training path or loss,
@@ -258,6 +264,7 @@ _TRAIN_ENV_OVERRIDES = {
     "lr": ("GPT_LR", float),
     "min_lr": ("GPT_MIN_LR", float),
     "steps": ("GPT_STEPS", int),
+    "target_tokens": ("GPT_TARGET_TOKENS", int),
     "eval_interval": ("GPT_EVAL_INTERVAL", int),
     "eval_batches": ("GPT_EVAL_BATCHES", int),
     "save_every_steps": ("GPT_SAVE_EVERY", int),
@@ -265,21 +272,43 @@ _TRAIN_ENV_OVERRIDES = {
 }
 
 
-def resolve_train_config():
+def resolve_train_config(context_length=None, world_size=1):
     """TrainConfig with any `GPT_*` env overrides applied.
 
     Lets a smoke test or a differently-sized machine run the same checkout without
     editing source — a smoke test that needs a code edit is one people skip.
+
+    If `GPT_TARGET_TOKENS` is set, it takes precedence over `GPT_STEPS`: the latter
+    is derived as ``ceil(target_tokens / (batch * context * world_size))``. Passing
+    the active context length/world size is therefore required when a token target is
+    used (and is done by ``load_settings`` for normal training).
     """
     overrides = {}
     for field_name, (env_var, cast) in _TRAIN_ENV_OVERRIDES.items():
         raw = os.getenv(env_var)
         if raw is not None:
             overrides[field_name] = cast(raw)
-    return replace(TrainConfig(), **overrides) if overrides else TrainConfig()
+    cfg = replace(TrainConfig(), **overrides) if overrides else TrainConfig()
+    if cfg.target_tokens is None:
+        return cfg
+    if cfg.target_tokens < 1:
+        raise ValueError(f"GPT_TARGET_TOKENS must be >= 1, got {cfg.target_tokens}")
+    if context_length is None:
+        return cfg
+    if world_size < 1:
+        raise ValueError(f"world_size must be >= 1, got {world_size}")
+    if cfg.batch_size < 1:
+        raise ValueError(f"GPT_BATCH_SIZE must be >= 1, got {cfg.batch_size}")
+    tokens_per_step = cfg.batch_size * context_length * world_size
+    return replace(cfg, steps=math.ceil(cfg.target_tokens / tokens_per_step))
 
 
-def load_settings(preset_name=None):
+def load_settings(preset_name=None, world_size=1):
     """One call for everything an entrypoint needs: (model_cfg, train_cfg, paths, label)."""
     model_cfg, label = resolve_model_config(preset_name)
-    return model_cfg, resolve_train_config(), Paths(label=label), label
+    return (
+        model_cfg,
+        resolve_train_config(model_cfg.context_length, world_size),
+        Paths(label=label),
+        label,
+    )

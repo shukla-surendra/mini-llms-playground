@@ -254,7 +254,11 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None,
         # construction's rank-0-broadcast above, so it simply overwrites that broadcast
         # (fresh-init) state with the real resumed weights on every rank identically;
         # a little redundant work, not a correctness issue.
-        _resume_into(state, raw_model, optimizer, paths, model_cfg, ctx_len, device, is_main=is_main)
+        _resume_into(
+            state, raw_model, optimizer, paths, model_cfg, ctx_len, device,
+            target_tokens=train_cfg.target_tokens, batch_size=train_cfg.batch_size,
+            is_main=is_main,
+        )
 
     # ETA from this run's own history. Only meaningful after a resume, where
     # `start_step` steps have demonstrably taken `total_training_seconds` — at step 0
@@ -299,7 +303,8 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None,
     )
 
 
-def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device, is_main=True):
+def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device,
+                 target_tokens=None, batch_size=None, is_main=True):
     """Restore weights/optimizer/progress from the latest checkpoint, if compatible.
 
     `model` here must always be the unwrapped raw module, never a DDP wrapper — see
@@ -335,6 +340,22 @@ def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device, is_
                 f"ctx={ctx_len}). Starting a fresh run."
             )
         return
+
+    # `GPT_TARGET_TOKENS` derives the total *micro-step* count from the current
+    # batch size. A checkpoint's step number only has that meaning under the same
+    # batch size; accepting a changed batch here could immediately and incorrectly
+    # declare the token-target run complete. Start a fresh token-budgeted run instead.
+    checkpoint_batch_size = checkpoint.get("batch_size")
+    if (
+        target_tokens is not None
+        and checkpoint_batch_size is not None
+        and checkpoint_batch_size != batch_size
+    ):
+        raise ValueError(
+            "Cannot resume a GPT_TARGET_TOKENS run with a different GPT_BATCH_SIZE "
+            f"(checkpoint={checkpoint_batch_size}, current={batch_size}). "
+            "Use RESUME_TRAINING=0 to start the new token-budgeted run."
+        )
 
     checkpoint_attn_impl = checkpoint.get("attn_impl", "naive")
     model_state_dict = checkpoint["model_state_dict"]
