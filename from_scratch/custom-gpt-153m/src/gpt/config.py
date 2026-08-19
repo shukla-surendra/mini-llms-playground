@@ -114,7 +114,7 @@ class TrainConfig:
     min_lr: float = 4e-5
     weight_decay: float = 0.1
     grad_clip_norm: float = 1.0
-    steps: int = 150_000         # 2.46B tokens — see the class docstring
+    steps: int = 255_865         # 2.46B tokens — see the class docstring
     # Each eval is eval_batches*2 forward passes at full batch_size, so it is far more
     # expensive here than in the batch_size=1 sibling projects. 500 keeps it under ~3%
     # of step time; it is telemetry only and safe to change between resumes.
@@ -134,7 +134,8 @@ class TrainConfig:
     seed: int = 42
     # "auto" = bfloat16 on CUDA, fp32 everywhere else. bf16 (not fp16) because it needs
     # no GradScaler; Ampere/Ada support it, Turing (T4) does not — see docs/GPU_TRAINING.md.
-    precision: str = "auto"
+    # precision: str = "auto"
+    precision: str = "fp16"
     max_new_tokens: int = 80     # demo completion printed at the end of a run
     demo_prompt: str = "The quick brown fox"
 
