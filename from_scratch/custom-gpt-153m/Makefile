@@ -1,4 +1,4 @@
-.PHONY: help setup config presets books books-force data data-public data-legacy data-legacy-public data-all data-all-public tokenize tokenize-force tokenize-legacy tokenize-legacy-force benchmark benchmark-quick benchmark-sweep audit train train-fresh train-bg train-status train-stop train-logs infer serve eval test clean
+.PHONY: help setup config presets books books-force data data-public data-legacy data-legacy-public data-all data-all-public curate-shared tokenize tokenize-force tokenize-legacy tokenize-legacy-force benchmark benchmark-quick benchmark-sweep audit train train-fresh train-bg train-status train-stop train-logs infer serve export-vllm serve-vllm eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
 CORPUS_EXTRACTOR := $(CURDIR)/../../tools/corpus-extractor/target/release/corpus-extractor
@@ -70,9 +70,11 @@ help:
 	@echo "  make tokenize-legacy-force # Python fallback for 'make tokenize-force'"
 	@echo "  make benchmark     # measure throughput + project GPU hours/cost"
 	@echo "  make audit         # corpus quality gate, run before a long training run"
+	@echo "  make curate-shared # curate ../_shared_data into data/curated/ (does not replace training data)"
 	@echo ""
 	@echo "  make train         # train in the foreground (auto-resumes from the latest checkpoint)"
 	@echo "  make train-fresh   # train from scratch, ignoring existing checkpoints"
+	@echo "  make export-vllm   # export a checkpoint as a vLLM/HF GPT-2 artifact"
 	@echo "  make train-bg      # train detached in the background — see below"
 	@echo "  make train-status  # is a background run active? PID + last few log lines"
 	@echo "  make train-stop    # stop a background run gracefully (SIGINT, saves latest.pt)"
@@ -198,6 +200,9 @@ data-all-public:
 	$(MAKE) data-public; \
 	$(MAKE) tokenize
 
+curate-shared: setup
+	uv run gpt-curate-data --input-dir ../_shared_data --output-dir data/curated
+
 # Build data/*.bin (flat uint16 token files) once, so training never re-tokenizes
 # the corpus on a GPU billed by the hour. Skips files whose .bin is already current.
 tokenize: setup
@@ -279,6 +284,16 @@ infer: setup
 
 serve: setup
 	uv run gpt-serve --reload
+
+export-vllm:
+	uv sync --extra hf-export
+	uv run --extra hf-export gpt-export-vllm
+
+serve-vllm:
+	@if [ "$$(uname -s)" = "Linux" ]; then uv sync --extra vllm; fi
+	@test -n "$(VLLM_MODEL_DIR)" || (echo "Set VLLM_MODEL_DIR to an export directory." >&2; exit 2)
+	@test -x "$(CURDIR)/.venv/bin/vllm" || (echo "vLLM is not installed in this project's .venv." >&2; exit 2)
+	"$(CURDIR)/.venv/bin/vllm" serve "$(VLLM_MODEL_DIR)" --model-impl transformers $(VLLM_ARGS)
 
 eval: setup
 	uv run gpt-eval $(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)

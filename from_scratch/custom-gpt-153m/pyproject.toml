@@ -26,6 +26,16 @@ gpt-infer = "gpt.cli.infer:main"
 gpt-serve = "gpt.cli.serve:main"
 gpt-eval = "gpt.cli.evaluate:main"
 gpt-qa-report = "gpt.cli.qa_report:main"
+gpt-export-vllm = "gpt.cli.export_vllm:main"
+gpt-curate-data = "gpt.cli.curate_shared_data:main"
+
+[project.optional-dependencies]
+hf-export = ["transformers>=4.46,<6", "safetensors>=0.4"]
+vllm = [
+    "transformers>=4.46,<6",
+    "safetensors>=0.4",
+    "vllm>=0.11; sys_platform == 'linux'",
+]
 
 [build-system]
 requires = ["hatchling"]
