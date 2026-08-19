@@ -357,14 +357,42 @@ make export-vllm
 make serve-vllm VLLM_MODEL_DIR=exports/vllm/50m/best-step-123400
 ```
 
-The first command installs the optional CUDA/Linux vLLM dependencies and reads only a
+The export command installs only portable Hugging Face dependencies and reads only a
 checkpoint. It never modifies `checkpoints/<label>/`, including `latest.pt` and its
 optimizer state, so normal `make train` resume behavior is unchanged. Export directories
 are immutable and include the source step, allowing an exported snapshot to coexist with
 a later resumed training run. Use `gpt-export-vllm --checkpoint latest` when you
-explicitly want a snapshot of the latest resumable state. The serving target forces
-vLLM's Transformers backend, which loads the exported standard `GPT2LMHeadModel` with
-the exact architecture settings recorded in its `config.json`.
+explicitly want a snapshot of the latest resumable state.
+
+### Testing vLLM on an Apple-Silicon Mac
+
+The exported model can be served on a Mac through vLLM's **experimental CPU backend**.
+This is a compatibility test, not a performance path: it does not use MPS or the Apple
+GPU. vLLM currently requires a source build on macOS, so install that build into this
+project's own `.venv` once:
+
+```bash
+# From the custom-gpt-50m directory. Do not activate another project's environment.
+uv sync --extra hf-export
+source .venv/bin/activate
+git clone https://github.com/vllm-project/vllm.git /tmp/vllm-source
+cd /tmp/vllm-source
+uv pip install -r requirements/cpu.txt
+uv pip install -e .
+cd /Users/surendrashukla/projects/mini-llms-playground/from_scratch/custom-gpt-50m
+```
+
+Then export and serve the model:
+
+```bash
+make export-vllm
+make serve-vllm VLLM_MODEL_DIR=exports/vllm/50m/best-step-123400
+```
+
+`make serve-vllm` uses `.venv/bin/vllm` directly on macOS, so it does not trigger an
+attempt to install CUDA packages. For GPU inference on your Mac, use the existing MPS
+server (`make serve`) instead. vLLM-Metal is a separate MLX-based plugin and does not
+serve this standard Hugging Face export.
 
 ## Monitoring a long run
 

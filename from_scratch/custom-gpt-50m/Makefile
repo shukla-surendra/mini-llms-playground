@@ -189,15 +189,22 @@ serve: setup
 # Reads a checkpoint and writes exports/vllm/<label>/<checkpoint>-step-<N>/.
 # It never changes checkpoints/<label>/, so native `make train` resume remains intact.
 export-vllm:
-	uv sync --extra vllm
-	uv run --extra vllm gpt-export-vllm
+	uv sync --extra hf-export
+	uv run --extra hf-export gpt-export-vllm
 
 # `make export-vllm` prints the immutable directory to pass as VLLM_MODEL_DIR.
+# On Linux this installs the declared vLLM extra. On macOS, install vLLM's
+# experimental CPU build from source into this project's .venv first (README).
 # Extra flags such as --port 8001 can be supplied through VLLM_ARGS.
 serve-vllm:
+	@if [ "$$(uname -s)" = "Linux" ]; then uv sync --extra vllm; fi
 	@test -n "$(VLLM_MODEL_DIR)" || (echo "Set VLLM_MODEL_DIR to an export directory." >&2; exit 2)
-	uv sync --extra vllm
-	uv run --extra vllm vllm serve "$(VLLM_MODEL_DIR)" --model-impl transformers $(VLLM_ARGS)
+	@if [ ! -x "$(CURDIR)/.venv/bin/vllm" ]; then \
+		echo "vLLM is not installed in this project's .venv." >&2; \
+		echo "macOS: follow README's vLLM CPU-from-source setup, then retry." >&2; \
+		exit 2; \
+	fi
+	"$(CURDIR)/.venv/bin/vllm" serve "$(VLLM_MODEL_DIR)" --model-impl transformers $(VLLM_ARGS)
 
 eval: setup
 	uv run gpt-eval
