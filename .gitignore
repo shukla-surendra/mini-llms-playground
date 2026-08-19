@@ -51,9 +51,9 @@ data/test_prompts.txt
 # shared corpus in others, and a trailing slash would only match the directory form.
 from_scratch/*/data
 # Curated QA prompt suites are hand-written test fixtures, not downloaded corpora.
-!from_scratch/custom-gpt-153m/data/
-!from_scratch/custom-gpt-153m/data/prompt_sets/
-!from_scratch/custom-gpt-153m/data/prompt_sets/*.jsonl
+from_scratch/custom-gpt-153m/data/
+from_scratch/custom-gpt-153m/data/prompt_sets/
+from_scratch/custom-gpt-153m/data/prompt_sets/*.jsonl
 from_scratch/_shared_data
 fine_tuning/*/data
 base_models/*/data
@@ -62,8 +62,8 @@ base_models/*/data
 # other project's data/ (downloaded/generated, intentionally excluded just above).
 # Un-ignore the directory itself, then the one file inside it — negating just the file
 # doesn't work while git still treats the parent directory as excluded.
-!from_scratch/custom-gpt-nano/data
-!from_scratch/custom-gpt-nano/data/corpus.txt
+from_scratch/custom-gpt-nano/data
+from_scratch/custom-gpt-nano/data/corpus.txt
 # Token files built by `gpt-tokenize`, wherever they land.
 *.bin
 logs

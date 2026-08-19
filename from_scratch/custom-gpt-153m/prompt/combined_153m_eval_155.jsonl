@@ -1,0 +1,155 @@
+{"category": "Short factual", "kind": "probe", "prompt": "What is the capital of Japan?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Name the largest planet in our solar system."}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the chemical symbol for gold?"}
+{"category": "Short factual", "kind": "probe", "prompt": "How many continents are there on Earth?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the boiling point of water at sea level in Celsius?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Who wrote the novel Pride and Prejudice?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the smallest prime number?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Which ocean is the largest?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What gas do plants primarily absorb during photosynthesis?"}
+{"category": "Short factual", "kind": "probe", "prompt": "How many sides does a hexagon have?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the currency of India?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Which planet is known as the Red Planet?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the largest mammal on Earth?"}
+{"category": "Short factual", "kind": "probe", "prompt": "How many days are in a leap year?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the freezing point of water in Celsius?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Which organ pumps blood through the human body?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the square root of 144?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Which language has the largest number of native speakers?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the hardest natural mineral commonly known?"}
+{"category": "Short factual", "kind": "probe", "prompt": "How many degrees are in a right angle?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the capital city of Australia?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Which metal is liquid at room temperature?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the longest river in South America?"}
+{"category": "Short factual", "kind": "probe", "prompt": "Which instrument is used to measure temperature?"}
+{"category": "Short factual", "kind": "probe", "prompt": "What is the nearest star to Earth besides the Sun?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If a book costs $12 and is 25% off, what is the sale price?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A train travels 240 km in 4 hours. What is its average speed?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If 5 workers finish a task in 12 days at the same rate, how many worker-days does the task require?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A box contains 24 apples. If one-third are removed, how many remain?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "What is 17 × 8?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "What is 15% of 240?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A rectangle is 8 cm long and 5 cm wide. What is its area?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If today is Monday, what day of the week will it be 17 days from now?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A product costs $80 and its price increases by 10%. What is the new price?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If three pencils cost $1.50, how much do eight pencils cost at the same rate?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A class has 18 students, and 2/3 of them passed. How many students passed?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "What is the average of 12, 18, 20, and 30?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If a clock shows 3:00, what is the angle between the hour and minute hands?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A tank holds 60 liters and is 40% full. How many liters are in it?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If x + 7 = 19, what is x?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A car uses 8 liters of fuel per 100 km. How much fuel does it use for 250 km?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "What is the next number in the sequence 2, 4, 8, 16, 32?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A $50 item has a $7.50 discount. What percentage discount is that?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If a meeting starts at 9:45 and lasts 1 hour 35 minutes, when does it end?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "There are 7 red balls and 5 blue balls in a bag. What is the probability of drawing a blue ball?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "If 4 notebooks cost $12, what is the cost of 15 notebooks?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A number is doubled and then increased by 5 to give 21. What is the number?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A family spends $600 per month on rent and $200 on utilities. What fraction of the total is rent?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "What is 3/4 expressed as a percentage?"}
+{"category": "Short reasoning", "kind": "probe", "prompt": "A square has a perimeter of 36 cm. What is the length of one side?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "What are three simple ways to stay productive while working from home?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Give me a concise checklist for preparing for a job interview."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Suggest five healthy vegetarian breakfast ideas."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "How can I organize a busy weekday into focused work blocks?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "What are some practical ways to reduce distractions while studying?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Give me a simple packing list for a two-day business trip."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "How can I make a difficult technical explanation easier for a beginner to understand?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Suggest a simple evening routine for preparing for the next workday."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "What are three ways to make a meeting more effective?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "How should I prioritize tasks when everything feels urgent?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Give me five ideas for a low-cost weekend activity."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "How can I politely ask a colleague for a status update?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "What information should I include when reporting a software bug?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Give me a simple method for taking useful notes during a technical meeting."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "How can I break a large project into smaller manageable tasks?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Suggest a few ways to improve clarity in professional writing."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "What should I check before sending an important email?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "How can I create a realistic one-week learning goal?"}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "Give me three strategies for remembering new technical concepts."}
+{"category": "Everyday assistant", "kind": "kind", "prompt": "How can I compare two technical solutions fairly?"}
+{"category": "Programming", "kind": "probe", "prompt": "Show a small Python function that returns the largest value in a list, and explain an empty-list edge case."}
+{"category": "Programming", "kind": "probe", "prompt": "Write a Python function that counts how many times a word appears in a list."}
+{"category": "Programming", "kind": "probe", "prompt": "What is the difference between a Python list and a tuple?"}
+{"category": "Programming", "kind": "probe", "prompt": "Explain what a Python dictionary is and give a small example."}
+{"category": "Programming", "kind": "probe", "prompt": "Write a SQL query that returns all users created in the last 30 days."}
+{"category": "Programming", "kind": "probe", "prompt": "What is the purpose of a database index?"}
+{"category": "Programming", "kind": "probe", "prompt": "Explain the difference between HTTP GET and POST."}
+{"category": "Programming", "kind": "probe", "prompt": "What does a 404 HTTP status code mean?"}
+{"category": "Programming", "kind": "probe", "prompt": "What is the difference between a process and a thread?"}
+{"category": "Programming", "kind": "probe", "prompt": "What does Big O notation describe?"}
+{"category": "Programming", "kind": "probe", "prompt": "Write pseudocode for binary search."}
+{"category": "Programming", "kind": "probe", "prompt": "What is a cache, and why can caching improve performance?"}
+{"category": "Programming", "kind": "probe", "prompt": "Explain what an API endpoint is."}
+{"category": "Programming", "kind": "probe", "prompt": "What is JSON commonly used for in software systems?"}
+{"category": "Programming", "kind": "probe", "prompt": "What is the purpose of a unit test?"}
+{"category": "Programming", "kind": "probe", "prompt": "Explain the difference between authentication and authorization."}
+{"category": "Programming", "kind": "probe", "prompt": "What is a Docker container?"}
+{"category": "Programming", "kind": "probe", "prompt": "What problem does a load balancer solve?"}
+{"category": "Programming", "kind": "probe", "prompt": "What is a database transaction?"}
+{"category": "Programming", "kind": "probe", "prompt": "Explain the purpose of a message queue in a distributed system."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a web browser loads a page after a user enters a URL. Cover DNS, HTTPS, the server response, and rendering. Use short sections."}
+{"category": "Long planning", "kind": "probe", "prompt": "Create a seven-day study plan for a beginner learning Python for one hour per day. Include goals, exercises, and a small project by the end."}
+{"category": "Long coding", "kind": "probe", "prompt": "Explain how to debug a slow SQL query on a large table. Discuss query plans, indexes, filtering, joins, and measurement."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how DNS resolution works from a user's device to the authoritative name server. Distinguish recursive and authoritative servers."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain the lifecycle of an HTTP request from a browser through a load balancer to an application server and back to the client."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain database replication and why a system might use a primary database with read replicas. Discuss consistency and failure scenarios."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain horizontal scaling versus vertical scaling with examples from a web application. Include major trade-offs."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a cache such as Redis can reduce database load. Discuss cache hits, misses, expiration, and stale data."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain what happens when a Kubernetes Deployment is updated. Cover Pods, ReplicaSets, rolling updates, and readiness."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain the difference between synchronous and asynchronous processing in a backend service. Include when each approach is useful."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a message queue supports reliable background processing. Discuss acknowledgements, retries, visibility timeouts, and dead-letter queues."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain database normalization up to third normal form using a simple example."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain ACID transactions and give a practical example involving money transfer between two accounts."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain eventual consistency and why it can be acceptable in some distributed systems."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain the CAP theorem in practical terms. Avoid treating it as simply choosing two letters permanently."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a reverse proxy works and how it differs from a forward proxy."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain rate limiting for an API. Compare token bucket and fixed-window approaches at a high level."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain observability using logs, metrics, and traces. Give an example of diagnosing a slow API request."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a CI/CD pipeline can safely deploy a backend service. Include testing, staging, rollout, and rollback."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain the difference between blue-green and canary deployments and when you would choose each."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how public-key cryptography supports HTTPS. Focus on the roles of certificates, keys, and symmetric encryption."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how an operating system manages virtual memory and why paging is useful."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain garbage collection at a high level and why memory-managed languages still require careful resource handling."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a compiler typically transforms source code into executable machine code. Use simple stages."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a relational database executes a query and chooses an execution plan."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain why indexes can speed up reads but also increase storage and write costs."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain the difference between batch processing and stream processing with practical examples."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain idempotency in distributed systems and show why it matters when requests can be retried."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a distributed lock works conceptually and describe risks such as stale locks."}
+{"category": "Long explanation", "kind": "probe", "prompt": "Explain how a service can handle a downstream dependency failure using timeouts, retries, and circuit breakers."}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain the difference between training, validation, and test datasets for a machine learning model."}
+{"category": "ML systems", "kind": "probe", "prompt": "What is overfitting, and name two common ways to reduce it?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain precision and recall using a simple classification example."}
+{"category": "ML systems", "kind": "probe", "prompt": "What is the purpose of a learning rate in neural network training?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain the difference between a parameter and a hyperparameter."}
+{"category": "ML systems", "kind": "probe", "prompt": "What is a batch in neural network training?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain why GPUs are useful for neural network training."}
+{"category": "ML systems", "kind": "probe", "prompt": "What is mixed-precision training and why can it improve performance?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain what a token is in a language model."}
+{"category": "ML systems", "kind": "probe", "prompt": "What does context window mean for a language model?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain autoregressive text generation in simple terms."}
+{"category": "ML systems", "kind": "probe", "prompt": "Why does an autoregressive model append a newly generated token to the existing sequence?"}
+{"category": "ML systems", "kind": "probe", "prompt": "What is an embedding, and how can embeddings be used for semantic search?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain the difference between pretraining and instruction tuning."}
+{"category": "ML systems", "kind": "probe", "prompt": "What is inference latency, and what factors can affect it for a language model?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain why increasing sequence length can increase the compute and memory requirements of transformer models."}
+{"category": "ML systems", "kind": "probe", "prompt": "What is a temperature parameter in text generation?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Explain greedy decoding and how it differs from sampling."}
+{"category": "ML systems", "kind": "probe", "prompt": "What is perplexity used for when evaluating language models?"}
+{"category": "ML systems", "kind": "probe", "prompt": "Design a small evaluation set for a 153M-parameter language model with a 1024-token context window. Include short, reasoning, coding, and long-context prompts."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A service handles 120 requests per second. If each request takes 250 ms of average processing time and concurrency is stable, estimate the average number of in-flight requests using Little's Law."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A database query scans 10 million rows and returns 100 rows. Explain why an index might help and what factors could make a full scan preferable."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "An API has a 2% failure rate and each failed request is retried once. Explain how retries can increase load and potentially make an outage worse."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A cache has a 90% hit rate and the application receives 10,000 requests per minute. Approximately how many requests per minute reach the backend database?"}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A model has a 1024-token context window. Explain why a prompt plus generated output may need to share a token budget."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A queue receives 500 messages per minute while workers process 450 messages per minute. What happens to backlog over time, and what would you investigate?"}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A web service has three application instances behind a load balancer. Explain what happens if one instance becomes unhealthy."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A database replica is 5 seconds behind the primary. Give two situations where reading from that replica could produce surprising behavior."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A Python program becomes slower as the input list grows. Describe how you would determine whether the issue is algorithmic complexity or an implementation bottleneck."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A language model gives correct answers to short prompts but fails on longer prompts. Give several hypotheses related to context length, training, attention, and evaluation."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A training job runs out of GPU memory when batch size is doubled. Explain several ways to reduce memory usage without simply buying a larger GPU."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A service writes an event to a queue and then crashes before recording the operation as complete. Explain why idempotency is useful when the event is processed again."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "Two API versions return the same data but one is twice as slow. Describe a systematic approach to finding the performance difference."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "A model evaluation contains 150 prompts, but 80% are short factual questions. Explain why this may give a misleading picture of overall model capability."}
+{"category": "Mixed reasoning", "kind": "probe", "prompt": "Design a balanced 150-question evaluation set for a small language model. Explain how you would distribute questions across factual recall, reasoning, coding, instruction following, and longer prompts while respecting a 1024-token context window."}
