@@ -46,8 +46,20 @@ def select_backend(requested: str, host: str, port: int) -> Backend:
     available = torch_backend()
     if requested == "auto":
         # vLLM-Metal brings MLX itself, so a separate PyTorch install is not required
-        # merely to recognize an Apple-Silicon Mac.
-        requested = available or ("mps" if platform.system() == "Darwin" and platform.machine() == "arm64" else "cpu")
+        # merely to recognize an Apple-Silicon Mac — but the mps command below still
+        # needs the `vllm` CLI itself, which only vLLM-Metal's `[vllm]` extra provides.
+        # As of 2026-08, that install fails on every real Mac: vLLM's PyPI package
+        # unconditionally depends on nvidia-cudnn-frontend/nvidia-cutlass-dsl, neither
+        # of which has ever shipped a macOS wheel (see README's Known issues). Check
+        # for the CLI rather than assume the install worked, so auto mode falls back
+        # to the CPU server instead of selecting a backend that can't actually run.
+        is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
+        if available == "cuda":
+            requested = "cuda"
+        elif is_apple_silicon and shutil.which("vllm") is not None:
+            requested = "mps"
+        else:
+            requested = "cpu"
 
     if requested == "cuda":
         if available != "cuda":

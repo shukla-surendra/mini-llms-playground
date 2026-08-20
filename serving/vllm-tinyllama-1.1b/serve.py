@@ -36,7 +36,18 @@ def main() -> None:
     detected = accelerator()
     backend = args.backend
     if backend == "auto":
-        backend = detected or ("mps" if platform.system() == "Darwin" and platform.machine() == "arm64" else "cpu")
+        # mps still needs the `vllm` CLI (from vLLM-Metal's `[vllm]` extra). As of
+        # 2026-08 that install fails on every real Mac — vLLM's PyPI package
+        # unconditionally depends on nvidia-cudnn-frontend/nvidia-cutlass-dsl, neither
+        # of which has a macOS wheel (see README's Known issues) — so check for the
+        # CLI rather than assume the install worked, and fall back to CPU otherwise.
+        is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
+        if detected == "cuda":
+            backend = "cuda"
+        elif is_apple_silicon and shutil.which("vllm") is not None:
+            backend = "mps"
+        else:
+            backend = "cpu"
     if backend == "cuda":
         if detected != "cuda":
             parser.error("CUDA was requested but PyTorch cannot access an NVIDIA GPU.")

@@ -12,8 +12,19 @@ help: ## Show available commands.
 
 install: ## Detect the platform and install the appropriate serving backend.
 	@if [ "$(shell uname -s)" = "Darwin" ] && [ "$(shell uname -m)" = "arm64" ]; then \
-		echo "Apple Silicon detected: installing vLLM-Metal"; \
-		uv sync --extra metal; \
+		echo "Apple Silicon detected: trying vLLM-Metal"; \
+		if uv sync --extra metal; then \
+			echo "vLLM-Metal installed."; \
+		else \
+			echo ""; \
+			echo "vLLM-Metal install failed. As of 2026-08, vLLM's PyPI package"; \
+			echo "unconditionally depends on nvidia-cudnn-frontend/nvidia-cutlass-dsl,"; \
+			echo "neither of which has ever shipped a macOS wheel (an upstream"; \
+			echo "packaging gap, not something fixable from this project alone —"; \
+			echo "see README's Known issues). Falling back to the CPU server."; \
+			echo ""; \
+			uv sync --extra cpu; \
+		fi; \
 	elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then \
 		echo "NVIDIA CUDA detected: installing vLLM"; \
 		uv sync --extra vllm; \

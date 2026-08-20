@@ -692,6 +692,274 @@ Full teardown, same procedure as the 50m session: emptied the `153m/` bucket pre
 then `terraform destroy -auto-approve`. Verified via `gcloud compute instances list`
 (0 items) and `terraform state list` (empty) — nothing left billing.
 
+## Session 3: custom-gpt-153m real resume, full command trail (2026-08-20)
+
+Third use of this module. Unlike Session 2 (speed measurement only, torn down at
+step 440), this is a genuine resume of an in-progress pretraining run — local
+Mac/MPS training had reached **step 16,847/127,933** (`GPT_STEPS=127933`, a
+recalibrated budget, not Session 2's 150,000) before being stopped cleanly
+(`Ctrl-C` in the local `make train` session, confirmed `Saved:
+checkpoints/153m/latest.pt`). Every command below was actually run, in order,
+against the state that existed at the start of this session (module fully torn
+down — no bucket, no instance, `terraform state list` empty).
+
+### 1. Recreate free infra (bucket/SA/firewall, no instance)
+
+```bash
+cd infra/gcp-gpu-node
+terraform init -input=false
+terraform apply -auto-approve -var instance_count=0
+```
+Recreated the bucket (`mini-llm-gpu-llm-training-dev-us-central1`), service account,
+and both firewall rules — 5 resources, $0 billing (no instance).
+
+### 2. Upload corpus + checkpoint
+
+```bash
+make upload-corpus            # PROJECT_DIR defaults to ../../<project_subdir> = custom-gpt-153m
+make upload-checkpoint
+```
+**Known gap surfaced here**: `upload-corpus`'s `gcloud storage rsync ... --include-file-pattern="*.bin,*.bin.json"`
+has no filename filter beyond the extension, so it also swept up
+`data/train.full-7b.bin` (14GB, an unrelated larger corpus sitting in the same
+`data/` directory, not used by this run) alongside the real `train.bin`/`test.bin`
+(~6GB). Uploaded **18.78GiB instead of the intended ~6GB** — harmless to training
+correctness (the trainer only reads `train.bin`/`test.bin`, the extra file just sits
+unused on the box's disk) but adds real upload/boot-time-pull minutes. **Not fixed
+this session** (would have meant re-running an already-in-flight transfer) — worth
+tightening the glob (e.g. exclude `*-7b*`, or keep that file outside `data/`) before
+the next upload if `train.full-7b.bin` still exists alongside the active corpus then.
+
+Checkpoint upload: 5.12GiB (`best.pt`/`latest.pt`/`serving.pt`, step 16,847).
+
+### 3. Find GPU capacity — zone rotation
+
+Quota was never the blocker this session (`NVIDIA_L4_GPUS` limit=1 usage=0 and
+`GPUS_ALL_REGIONS` limit=1 usage=0 in every region checked) — pure regional
+`STOCKOUT`, continuing the pattern from Sessions 1-2. Before this session's own
+attempts, `terraform.tfvars`'s own comments already recorded `us-central1-a/-b/-c`,
+`us-west1-a/-b`, and `us-east4-a` as STOCKOUT and `us-east4-b` as not offering
+`g2-standard-4` at all (all tried earlier the same day, 2026-08-20, in a prior
+attempt this session picked up from). `zone` is overridable per-`apply` on the CLI
+(`-var zone=...`) without touching `terraform.tfvars`, since `main.tf` reads
+`var.zone` directly — used to rotate zones without an edit-plan-apply cycle per zone:
+
+```bash
+for z in us-west1-c us-east4-c us-east1-b us-east1-c us-east1-d us-west4-a us-west4-c; do
+  terraform apply -auto-approve -var instance_count=1 -var "zone=$z" && break
+  # on STOCKOUT: terraform apply -auto-approve -var instance_count=0 -var "zone=$z"  (clean up, try next)
+done
+```
+Results this session: `us-west1-c` STOCKOUT, `us-east4-c` STOCKOUT, `us-east1-b`
+STOCKOUT, **`us-east1-c` succeeded** (instance `RUNNING` within ~30s). `us-east1-d`/
+`us-west4-a`/`us-west4-c` were never needed. `region` stayed `us-central1` for the
+bucket per the existing cross-region-is-cheap reasoning; `zone=us-east1-c` for the
+instance.
+
+### 4. Verify boot, GPU, data
+
+```bash
+# bootstrap-log — bounded snapshot pattern (no -f), same rationale as Session 1:
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> 'tail -n 300 /var/log/gpu-node-bootstrap.log'
+# ... repeated until "=== bootstrap done ===" appeared (bootstrap took ~3.5 minutes,
+# apt update + uv sync + corpus/checkpoint pull, corpus pull was the slowest step
+# because of the extra 14GB file from step 2 above)
+
+make gpu   # NVIDIA L4, driver 580.173.02, torch 2.11.0+cu130, bf16 True
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> 'ls -la ~/tiny_llm/from_scratch/custom-gpt-153m/data/'
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> 'sudo systemctl status checkpoint-sync.service --no-pager'
+```
+**New gap found**: `make gpu`'s own recipe (`uv run python3 -c ...`) failed with
+`uv: command not found` when run via a *separate* one-off `ssh gpu@<ip> '<cmd>'`
+invocation outside the Makefile — `uv` lives at `~/.local/bin/uv`, added to `PATH`
+only for interactive login shells (`.bashrc`), not the non-interactive shell a bare
+`ssh host 'cmd'` gets. The Makefile's own `make gpu` target works because `make`
+itself runs the whole multi-command string through one `ssh ... 'nvidia-smi; cd ...
+&& uv run ...'` invocation — still non-interactive, so this likely only worked
+historically if `.bashrc` sourcing was in fact happening, or wasn't hit before
+because Session 1/2 always used `make gpu` verbatim, never split into separate `ssh`
+calls the way this session's verification steps did. **Workaround used**: invoke
+`~/.local/bin/uv` by full path in any one-off `ssh host 'cmd'` call that isn't going
+through the Makefile's own recipe.
+
+Checked the checkpoint on the box matched what was uploaded before trusting it:
+```bash
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> 'cd ~/tiny_llm/from_scratch/custom-gpt-153m && \
+  ~/.local/bin/uv run python3 -c "
+import torch
+c = torch.load(\"checkpoints/153m/latest.pt\", map_location=\"cpu\")
+print(c.get(\"step\"), c.get(\"batch_size\"), c.get(\"grad_accum_steps\"))
+"'
+# -> 16847 4 16, matching local exactly
+```
+
+### 5. Launch — precision decision, and a real interrupt-handling bug
+
+Checkpoint metadata: `batch_size=4, grad_accum_steps=16`. This codebase's token
+budget is `steps × batch_size × ctx_len`, **independent of `grad_accum`** — so
+launching with a *different* `batch_size` at the same `GPT_STEPS` would silently
+change the total tokens the budget represents, not just reshuffle compute. Matched
+exactly rather than "optimizing" toward Session 1/2's known-good L4 batch=16/accum=4
+(that pairing was never re-derived for the recalibrated 127,933-step budget, and
+changing it now would have desynced the LR schedule from what the local steps
+already assumed):
+
+```bash
+tmux new-session -d -s train
+tmux send-keys -t train "export PATH=\$HOME/.local/bin:\$PATH" C-m
+tmux send-keys -t train "cd ~/tiny_llm/from_scratch/custom-gpt-153m" C-m
+tmux send-keys -t train "GPT_BATCH_SIZE=4 GPT_GRAD_ACCUM=16 GPT_STEPS=127933 uv run gpt-train 2>&1 | tee -a /tmp/gpt-train.log" C-m
+```
+First banner: `Precision: torch.float16` — surprising on an L4 (bf16-capable).
+Traced to `src/gpt/config.py:138`: `precision: str = "fp16"` hardcoded as the
+project's default (with `"auto"`, which picks bf16 on CUDA, commented out just
+above it) — presumably set for the Mac/MPS runs, where this choice predates any GPU
+session. `trainer.py`'s own comment states bf16 needs no `GradScaler` "because it
+has fp32's exponent range" — implying fp16 without one genuinely can
+overflow/underflow, a real risk left running unattended for ~75 hours. No
+`GradScaler` exists anywhere in this codebase. **Decision (user's call): switch to
+bf16** via the `GPT_PRECISION` env var override (`config.py:273` registers it),
+rather than editing `config.py`'s default — model weights aren't stored in half
+precision (autocast only affects the forward/backward compute), so switching
+mid-run doesn't corrupt the resume.
+
+Stopping the fp16 launch to relaunch is where the real bug surfaced:
+```bash
+tmux send-keys -t train C-c
+```
+No `Interrupted — saving a resumable checkpoint...` line ever appeared (contrast
+with the local `make train-stop` session, which printed it every time), the
+`gpt-train` process was already gone within ~8s, and `checkpoints/153m/latest.pt`'s
+step was unchanged at 16847 — the ~664 microsteps made since resume (~11 minutes of
+L4 time, ~$0.13) were lost. **Root cause, isolated**: the ` | tee -a
+/tmp/gpt-train.log` pipe added to the launch command (for this session's own log
+monitoring, not present in Session 1/2's plain `uv run gpt-train`) sits between the
+terminal and the Python process; `tmux send-keys C-c`'s `SIGINT` did not reach
+`gpt-train`'s `except KeyboardInterrupt` handler (`trainer.py:482`) through it.
+**Fix**: use plain output redirection instead of a pipe — no second process in the
+foreground group to interfere with signal delivery:
+```bash
+tmux kill-session -t train
+tmux new-session -d -s train
+tmux send-keys -t train "export PATH=\$HOME/.local/bin:\$PATH" C-m
+tmux send-keys -t train "cd ~/tiny_llm/from_scratch/custom-gpt-153m" C-m
+tmux send-keys -t train "GPT_BATCH_SIZE=4 GPT_GRAD_ACCUM=16 GPT_STEPS=127933 GPT_PRECISION=bf16 uv run gpt-train > /tmp/gpt-train.log 2>&1" C-m
+```
+Confirmed clean: `Precision: torch.bfloat16`, `Resumed at step 16848` (matching
+16847+1, the expected off-by-one), 98% GPU util, 7.5/23GB VRAM. **Lesson for next
+time**: this project's own `config.py` documents a signal-delivery-quirk-proof
+fallback specifically for cases like this —
+`paths.stop_file` = `checkpoint_root/STOP_TRAINING` (`config.py:222-236`), polled
+every step. Prefer `touch checkpoints/STOP_TRAINING` on the box over `tmux
+send-keys ... C-c` for any future stop in a session that redirects/pipes
+`gpt-train`'s output, rather than assuming `Ctrl-C` will reach the process.
+
+### Speed & GPU utilization, measured directly (2026-08-20, ~30min after this launch)
+
+The training banner's own `eta_h` is misleading here: it's computed from
+*cumulative* `processed_tokens / elapsed_hours` since step 0, which blends in all
+the slow local Mac/MPS history (`total_h=11.50` at step ~19,635, i.e. the vast
+majority of that 11.5h was MPS, not this L4) — it read `eta_h=63.4` at step 19,635,
+implying ~63 more hours. That's the *historical blended* rate (`19635 / 11.50h /
+3600 ≈ 0.47 steps/s`), not this GPU's actual current rate. Measured the real
+GCP-only rate directly instead — two step-count snapshots a fixed wall-clock
+interval apart:
+
+```bash
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> "tail -c 400 /tmp/gpt-train.log | grep -oE '[0-9]+/127933' | tail -1"; date -u +%s
+# ... wait ~60s ...
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> "tail -c 400 /tmp/gpt-train.log | grep -oE '[0-9]+/127933' | tail -1"; date -u +%s
+```
+Result: step 19,777 → 20,098 over 67s = **4.79 steps/sec** (batch=4, ctx=1024, so
+`4.79 × 4,096 ≈ 19,624 tok/s`). At that rate, remaining budget (107,835 steps from
+step 20,098) is **~6.25 hours, ~$4.38 more** at $0.70/hr — not the ~63-75h the
+banner's own blended `eta_h` suggests. **Use a direct two-snapshot measurement like
+this, not the banner's `eta_h`, whenever a run mixes GPU types across its history**
+(same caution applies to any future resume that started on Mac/MPS or a different
+GPU generation).
+
+GPU utilization, same interval:
+```bash
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> 'nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,power.draw,power.limit,temperature.gpu --format=csv,noheader'
+# 96-100 %, 7532 MiB / 23034 MiB (~33%), 72.0-72.2 W draw against a 72.0 W limit, 76-79°C
+```
+Running essentially flat-out on compute (96-100%) while sitting at exactly the L4's
+rated 72W TDP — this is the L4's actual power envelope (a low-power card by design,
+not an artificial GCP cap), and VRAM headroom is ample (~15.5GB free) at this
+batch=4 config. Lower tok/s than Session 2's batch=16 measurement (23,760 tok/s) is
+consistent with that session's own finding that this model is memory-bandwidth-bound
+with MFU flat-to-worse at smaller batches, not a regression — batch=4 here was kept
+deliberately (see "Launch" above) to match the local checkpoint's token-budget math,
+not chosen for speed.
+
+### Precision switch diagnosis: did fp16→bf16 hurt quality? (2026-08-20)
+
+Raised by the user after seeing gibberish QA-report output on the GCP box and
+worrying the mid-run fp16→bf16 switch (see "Launch" above) had caused it.
+Investigated with the actual data rather than by inspection alone — checked
+`logs/train_eval_history_153m.csv` on both sides and diffed real QA report HTML
+files (not just described them):
+
+**Mechanically, the switch cannot corrupt a resume.** This codebase never stores
+half-precision weights — `trainer.py`'s own comment: "Weights/grads stay fp32
+regardless — autocast only changes the dtype of the ops inside the block." The
+checkpoint's fp32 master weights and fp32 Adam state are identical either way;
+`precision` only selects the `torch.autocast` dtype wrapping forward/backward. The
+LR schedule confirms this in practice: it decayed smoothly across the switch (LR
+3.88e-04 at step 17,000 in both the fp16 and bf16 launches), since it's a pure
+function of step count, untouched by precision.
+
+**The local run was already diverging, independent of GCP entirely.** Local
+`train_eval_history_153m.csv`: `best_test_loss` was set once, at step 1,500
+(`8.1031`, 2026-08-20T03:42 UTC), and never improved again — every eval after that,
+all the way to step 16,500 (`test_loss=52.5`, 2026-08-20T15:50 UTC, still local
+Mac/MPS, still fp16), climbed further. This predates any GCP involvement (GCP wasn't
+touched until ~16:00 UTC that day).
+
+**The bf16 switch on GCP immediately reversed the divergence, on the identical
+checkpoint.** Both launches resumed from the same step-16,847 weights. The first
+(fp16) continuation kept climbing (`train_loss` 54.4→56.6 from step 17,000→17,500,
+matching the local trend exactly). The second (bf16) launch, from that *same*
+starting checkpoint, dropped to `train_loss=7.90` by step 17,500 and kept improving
+to a new all-time-best `test_loss=7.6830` by step 21,000 — better than the local
+run ever achieved (8.1031). **Conclusion: fp16 without a `GradScaler` (this
+codebase has none — see "Launch" above) was almost certainly the actual cause of
+the original divergence**, most likely silent gradient overflow/underflow as LR
+ramped toward its ~4e-4 peak around step 2,000-5,000; bf16's wider exponent range
+doesn't have that failure mode. The fp16→bf16 direction taken here is the strictly
+safer one — the reverse (bf16→fp16) would be the risky switch.
+
+**The "gibberish" itself is real but unrelated to precision.** Pulled and read the
+actual HTML, not just metadata, on both sides: local `qa_report_153m_step1500.html`
+(local's numerical best, pre-divergence) and `qa_report_153m_step14143.html`
+(latest local) are both punctuation/function-word soup, no real sentences. GCP's
+`qa_report_153m_step19999.html` (this run's actual best checkpoint, `test_loss=
+7.7093`) is the same kind of soup. **All three look equally incoherent** — expected
+at 0.03-0.18 epochs over a 2.9B-token corpus for a 152M-param model, nowhere near
+enough data seen to form grammar yet, regardless of GPU or precision. No local
+report was ever found showing coherent sentences to compare against.
+
+**Process note**: generating a QA report (`uv run gpt-qa-report`) *while training is
+still running* on the same box shares the GPU with the live `tmux` training session
+— it completed, but took ~7 CPU-minutes (vs. presumably faster if run alone) due to
+contention, long enough to exceed a 2-minute one-shot `ssh` timeout. Not a hang; just
+slower than expected. Poll for the report file's existence + the process exiting
+rather than assuming a timed-out one-shot check means it failed.
+
+### Where this run stands at end of session
+
+Instance `mini-llm-gpu`, zone `us-east1-c`, `RUNNING`, ~$0.70/hr, **no automated
+cost guard** (same open issue as Sessions 1-2 — budget resource and self-stop IAM
+both still broken, manual monitoring is mandatory). Training resumed at step
+16,848/127,933 (13.2%), bf16, ETA ~75 hours if run continuously. **Not torn down at
+end of this session** — left running deliberately, unlike Sessions 1-2's
+intentional-stop-and-destroy pattern, since this is a real in-progress pretraining
+run, not a measurement exercise. Next session (or later this one): `make ssh` +
+`tmux attach -t train` to check progress, `touch checkpoints/STOP_TRAINING` on the
+box for a safe stop, `make download-checkpoints
+PROJECT_DIR=../../from_scratch/custom-gpt-153m` before any destructive step, `make
+down` to stop billing.
+
 ## Phase 6 — Day-to-day management
 
 | Situation | Command | Effect |

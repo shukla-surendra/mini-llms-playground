@@ -126,3 +126,19 @@ loaded model programmatically.
   Transformers/OpenAI-compatible server rather than trying to run a CUDA vLLM wheel.
 - The CUDA settings reserve only 55% of GPU memory and cap context at 2048 tokens. They
   are deliberately small defaults; raise them once the basic server is working.
+
+## Known issues
+
+- **vLLM-Metal currently fails to install on every real Mac** (confirmed 2026-08-20,
+  `uv sync --extra metal`): vLLM-Metal's `[vllm]` extra needs vanilla `vllm` (for the
+  `vllm` CLI vLLM-Metal registers itself with as a plugin), and as of `vllm==0.27.1`
+  on PyPI, its base install unconditionally depends on `nvidia-cudnn-frontend` and
+  `nvidia-cutlass-dsl` — neither has ever published a macOS wheel (they wrap CUDA
+  libraries that only make sense on NVIDIA hardware), and `vllm`'s own metadata has
+  no platform marker excluding them on Darwin. This is an upstream vLLM PyPI
+  packaging gap, not something fixable from this project's `pyproject.toml`.
+  `make install`/`serve.py --backend auto` detect this automatically (checking for
+  the `vllm` CLI rather than assuming the extra installed) and fall back to the CPU
+  server, so `make install && make serve` still works end-to-end on Apple Silicon
+  today — just via CPU/Transformers, not vLLM-Metal. `make serve-mps` remains
+  available to force the Metal path once/if upstream fixes this.
