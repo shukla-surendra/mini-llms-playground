@@ -101,9 +101,9 @@ class TrainConfig:
     `steps` and `batch_size` together set the token budget:
 
         tokens = steps * batch_size * context_length
-               = 150_000 * 16 * 1024 = 2.46B
+               = 183_106 * 16 * 1024 = 3.00B
 
-    That is ~16 tokens per parameter against this model's 152.8M, near the
+    That is ~20 tokens per parameter against this model's 152.8M, near the
     Chinchilla-optimal ~20:1 and sized to finish inside ~24 GPU-hours. Changing
     `batch_size` without changing `steps` silently rescales the whole budget.
     """
@@ -114,7 +114,7 @@ class TrainConfig:
     min_lr: float = 4e-5
     weight_decay: float = 0.1
     grad_clip_norm: float = 1.0
-    steps: int = 255_865         # 2.46B tokens — see the class docstring
+    steps: int = 183_106         # 3.00B tokens — see the class docstring
     # Each eval is eval_batches*2 forward passes at full batch_size, so it is far more
     # expensive here than in the batch_size=1 sibling projects. 500 keeps it under ~3%
     # of step time; it is telemetry only and safe to change between resumes.
