@@ -10,6 +10,15 @@ For a complete explanation of this launcher's role, vLLM internals, GPU memory a
 scheduling, tuning, scaling, deployment, and troubleshooting, read
 [`docs/VLLM_SERVING_GUIDE.md`](docs/VLLM_SERVING_GUIDE.md).
 
+For endpoint-by-endpoint request parameters and model/task applicability, read
+[`docs/VLLM_API_REFERENCE.md`](docs/VLLM_API_REFERENCE.md).
+
+To serve a custom PyTorch checkpoint or architecture, read
+[`docs/CUSTOM_PYTORCH_MODEL_INTEGRATION.md`](docs/CUSTOM_PYTORCH_MODEL_INTEGRATION.md).
+
+For the technical differences between PyTorch checkpoints and safetensors, including a
+safe serving-export workflow, read [`docs/CHECKPOINT_FORMATS.md`](docs/CHECKPOINT_FORMATS.md).
+
 `serve.py` detects the fastest usable local backend:
 
 | Hardware detected | Server | Model |
@@ -22,6 +31,10 @@ Apple MPS does not execute ordinary CUDA vLLM kernels. The MPS path uses
 vLLM-Metal—the vLLM hardware plugin backed by MLX/Metal—and the official MLX Community
 conversion of the same Hugging Face model; it still provides the same OpenAI-compatible
 API.
+
+The Apple dependency intentionally installs `vllm-metal[vllm]`: the `[vllm]` extra is
+what brings in vLLM core and the `vllm` command-line executable, in addition to the
+Metal plugin.
 
 The regular PyPI `vllm` wheel is CUDA-oriented. Its CPU backend needs a separate
 CPU-wheel/source-build procedure, so this project deliberately uses a small

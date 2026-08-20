@@ -13,7 +13,8 @@ cpu = ["fastapi>=0.110", "pydantic>=2.6", "torch>=2.2", "transformers>=4.44", "u
 # vLLM's Apple-Silicon plugin uses MLX/Metal beneath the regular vLLM server.
 # Keep this platform-scoped: uv resolves every optional extra when locking, including
 # ones not requested by `uv sync --extra vllm` on Linux.
-metal = ["vllm-metal>=0.1; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version >= '3.12'"]
+# The plugin's `vllm` extra installs vLLM core and its `vllm` CLI as well as Metal/MLX.
+metal = ["vllm-metal[vllm]>=0.1; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version >= '3.12'"]
 
 [tool.uv]
 package = false

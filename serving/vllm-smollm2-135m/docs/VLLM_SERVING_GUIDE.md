@@ -391,6 +391,9 @@ By the end of this guide, you should be able to explain, in your own words:
 
 ## Further reading
 
+- [vLLM API reference for this project](VLLM_API_REFERENCE.md)
+- [Custom PyTorch model integration](CUSTOM_PYTORCH_MODEL_INTEGRATION.md)
+- [PyTorch checkpoint versus safetensors formats](CHECKPOINT_FORMATS.md)
 - [vLLM documentation](https://docs.vllm.ai/)
 - [vLLM quickstart and OpenAI-compatible serving](https://docs.vllm.ai/en/latest/getting_started/quickstart/)
 - [vLLM installation and hardware backends](https://docs.vllm.ai/en/latest/getting_started/installation/)
