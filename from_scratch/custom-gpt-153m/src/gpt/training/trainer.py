@@ -60,12 +60,22 @@ def hours_for_tokens(remaining_tokens, tokens_per_hour):
     return remaining_tokens / tokens_per_hour
 
 
-def lr_for_step(step_idx, train_cfg):
-    """Linear warmup, then cosine decay to min_lr."""
-    warmup_steps = max(200, int(train_cfg.steps * 0.02))
+def lr_for_step(step_idx, train_cfg, total_optimizer_steps=None):
+    """Linear warmup, then cosine decay to min_lr, in optimizer-update units.
+
+    `train_cfg.steps` counts micro-batches, while the optimizer updates only once
+    every `grad_accum_steps` micro-batches. The LR schedule therefore needs to be
+    expressed in optimizer updates so gradient accumulation does not silently
+    change the schedule.
+    """
+    if total_optimizer_steps is None:
+        total_optimizer_steps = max(1, math.ceil(
+            train_cfg.steps / train_cfg.grad_accum_steps
+        ))
+    warmup_steps = max(1, int(total_optimizer_steps * 0.02))
     if step_idx < warmup_steps:
         return train_cfg.lr * float(step_idx + 1) / float(warmup_steps)
-    decay_steps = max(1, train_cfg.steps - warmup_steps)
+    decay_steps = max(1, total_optimizer_steps - warmup_steps)
     progress = min(1.0, max(0.0, (step_idx - warmup_steps) / decay_steps))
     cosine = 0.5 * (1.0 + math.cos(progress * math.pi))
     return train_cfg.min_lr + (train_cfg.lr - train_cfg.min_lr) * cosine
@@ -179,6 +189,9 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
     amp_device_type, amp_dtype = resolve_amp(train_cfg.precision, device)
 
     tokens_per_step = train_cfg.batch_size * ctx_len
+    total_optimizer_steps = max(1, math.ceil(
+        train_cfg.steps / train_cfg.grad_accum_steps
+    ))
     print(f"Model: {label}  |  {model.param_count():,} parameters  |  device={device}  |  attn_impl={attn_impl}")
     print(f"Train tokens: {len(train_tokens):,}  Test tokens: {len(test_tokens):,}")
     print(
@@ -190,8 +203,13 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
     # let a changed batch_size silently rescale the run (see TrainConfig's docstring).
     budget = train_cfg.steps * tokens_per_step
     print(
-        f"Budget: {train_cfg.steps:,} steps x {tokens_per_step:,} tok = {budget / 1e9:.2f}B tokens "
+        f"Budget: {train_cfg.steps:,} microsteps x {tokens_per_step:,} tok = {budget / 1e9:.2f}B tokens "
         f"({budget / model.param_count():.1f} tok/param, {budget / len(train_tokens):.2f} epochs)"
+    )
+    print(
+        f"Optimizer updates: ~{total_optimizer_steps:,} "
+        f"({train_cfg.grad_accum_steps} microsteps/update, "
+        f"{tokens_per_step * train_cfg.grad_accum_steps:,} tok/update)"
     )
     print(f"Checkpoints: {paths.checkpoint_dir}/")
 
@@ -247,6 +265,7 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
         state=state,
         amp_device_type=amp_device_type,
         amp_dtype=amp_dtype,
+        total_optimizer_steps=total_optimizer_steps,
     )
 
 
@@ -302,7 +321,7 @@ def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device):
 
 def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
               model_cfg, train_cfg, paths, label, device, state,
-              amp_device_type=None, amp_dtype=None):
+              amp_device_type=None, amp_dtype=None, total_optimizer_steps=None):
     run_start = time.time()
 
     def elapsed():
@@ -343,6 +362,18 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
     last_step = start_step - 1
     interrupted = False
     latest_metrics = None
+    # A checkpoint is resume-safe only after a complete optimizer update. If SIGINT
+    # arrives halfway through an accumulation window, the partial gradients are not
+    # serialized; we therefore resume from the last completed optimizer boundary.
+    last_safe_step = start_step - 1
+    last_safe_processed_tokens = state["processed_tokens"]
+    # Save at the first optimizer boundary at/after the requested interval. This
+    # preserves the configured cadence approximately without ever checkpointing
+    # halfway through gradient accumulation.
+    save_interval = max(1, train_cfg.save_every_steps)
+    next_save_step = ((start_step // save_interval) + 1) * save_interval - 1
+    while (next_save_step + 1) % train_cfg.grad_accum_steps != 0:
+        next_save_step += 1
 
     try:
         for step in range(start_step, train_cfg.steps):
@@ -397,10 +428,18 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
             # autocast only changes the dtype of the ops inside the block.
             (loss / train_cfg.grad_accum_steps).backward()
 
-            is_accum_boundary = (step - start_step + 1) % train_cfg.grad_accum_steps == 0
-            if is_accum_boundary or step == train_cfg.steps - 1:
+            # Accumulation boundaries are based on the absolute microstep number, not
+            # the resume-relative number. Otherwise resuming from a checkpoint that is
+            # not itself an accumulation boundary silently changes the effective batch
+            # grouping. The final partial window is still flushed so a run can finish.
+            is_accum_boundary = (step + 1) % train_cfg.grad_accum_steps == 0
+            is_final_step = step == train_cfg.steps - 1
+            if is_accum_boundary or is_final_step:
+                optimizer_update = (step + 1 + train_cfg.grad_accum_steps - 1) // train_cfg.grad_accum_steps
                 for group in optimizer.param_groups:
-                    group["lr"] = lr_for_step(step, train_cfg)
+                    group["lr"] = lr_for_step(
+                        optimizer_update - 1, train_cfg, total_optimizer_steps
+                    )
                 torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip_norm)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -424,8 +463,22 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
             state["processed_tokens"] += train_cfg.batch_size * ctx_len
             last_step = step
 
-            if (step + 1) % train_cfg.save_every_steps == 0:
+            # Only mark a step as resume-safe after an optimizer update. A partial
+            # accumulation window is intentionally discarded on interruption because
+            # those gradients are not part of the checkpoint payload.
+            if is_accum_boundary or is_final_step:
+                last_safe_step = step
+                last_safe_processed_tokens = state["processed_tokens"]
+
+            # Periodic checkpoints are aligned to optimizer boundaries so they never
+            # capture a partial gradient accumulation window.
+            if ((step >= next_save_step)
+                    and (is_accum_boundary or is_final_step)):
                 atomic_save(payload(step), paths.latest_checkpoint)
+                while next_save_step <= step:
+                    next_save_step += save_interval
+                while (next_save_step + 1) % train_cfg.grad_accum_steps != 0:
+                    next_save_step += 1
     except KeyboardInterrupt:
         interrupted = True
         print("\nInterrupted — saving a resumable checkpoint...")
@@ -434,15 +487,22 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
 
     final_total_seconds = elapsed()  # single source of truth from here on — see note above
     state["total_training_seconds"] = final_total_seconds
-    final_step = max(last_step, start_step - 1)
-    atomic_save(payload(final_step, total_training_seconds=final_total_seconds), paths.latest_checkpoint)
 
     if interrupted:
+        # Do not checkpoint a partial accumulation window. The model weights have not
+        # changed since the last completed optimizer update, so saving that exact safe
+        # boundary prevents a resume from mixing advanced weights with stale progress.
+        state["processed_tokens"] = last_safe_processed_tokens
+        final_step = last_safe_step
+        atomic_save(payload(final_step, total_training_seconds=final_total_seconds), paths.latest_checkpoint)
         print(f"Saved: {paths.latest_checkpoint}")
         print(f"Cumulative training time: {format_duration(state['total_training_seconds'])}")
         print("Resume with: make train")
         return {"interrupted": True, "step": final_step,
                 "best_test_loss": state["best_test_loss"]}
+
+    final_step = max(last_step, start_step - 1)
+    atomic_save(payload(final_step, total_training_seconds=final_total_seconds), paths.latest_checkpoint)
 
     completed = payload(max(final_step, train_cfg.steps - 1), total_training_seconds=final_total_seconds)
     atomic_save(completed, paths.final_checkpoint)
