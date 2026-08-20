@@ -18,6 +18,13 @@ Each experiment lives in its own subfolder under one of these three tracks, with
 README, requirements, and scripts — self-contained enough to run independently of the
 others.
 
+## Standalone serving
+
+[`serving/vllm-smollm2-135m/`](serving/vllm-smollm2-135m/) is a minimal
+OpenAI-compatible local server for Hugging Face's 135M-parameter SmolLM2 Instruct
+model. It automatically selects CUDA vLLM when available, uses the MLX/Metal route on
+Apple Silicon, and can run CPU-only through vLLM for a small functional baseline.
+
 ## Why these are separate tracks, not one project
 
 Training from scratch and fine-tuning are genuinely different exercises, not two flavors
