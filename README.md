@@ -23,7 +23,10 @@ others.
 [`serving/vllm-smollm2-135m/`](serving/vllm-smollm2-135m/) is a minimal
 OpenAI-compatible local server for Hugging Face's 135M-parameter SmolLM2 Instruct
 model. It automatically selects CUDA vLLM when available, uses the MLX/Metal route on
-Apple Silicon, and can run CPU-only through vLLM for a small functional baseline.
+Apple Silicon, and provides a CPU-only Transformers fallback for a functional baseline.
+
+[`serving/vllm-tinyllama-1.1b/`](serving/vllm-tinyllama-1.1b/) serves the original
+TinyLlama-1.1B Chat checkpoint using the same CUDA/Metal/CPU selection, on port `8005`.
 
 ## Why these are separate tracks, not one project
 

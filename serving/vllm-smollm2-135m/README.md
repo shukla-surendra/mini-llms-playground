@@ -19,6 +19,10 @@ To serve a custom PyTorch checkpoint or architecture, read
 For the technical differences between PyTorch checkpoints and safetensors, including a
 safe serving-export workflow, read [`docs/CHECKPOINT_FORMATS.md`](docs/CHECKPOINT_FORMATS.md).
 
+For the required model artifacts and the distinction between open-weight, open-source,
+and fully reproducible models, read
+[`docs/MODEL_ARTIFACTS_AND_OPENNESS.md`](docs/MODEL_ARTIFACTS_AND_OPENNESS.md).
+
 `serve.py` detects the fastest usable local backend:
 
 | Hardware detected | Server | Model |

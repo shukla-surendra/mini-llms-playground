@@ -1,0 +1,14 @@
+[project]
+name = "vllm-tinyllama-1.1b-serving"
+version = "0.1.0"
+description = "Platform-aware local serving for TinyLlama-1.1B-Chat"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+vllm = ["vllm>=0.11"]
+cpu = ["fastapi>=0.110", "pydantic>=2.6", "torch>=2.2", "transformers>=4.44", "uvicorn>=0.29"]
+metal = ["vllm-metal[vllm]>=0.1; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version >= '3.12'"]
+
+[tool.uv]
+package = false
