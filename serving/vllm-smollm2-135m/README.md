@@ -141,4 +141,37 @@ loaded model programmatically.
   the `vllm` CLI rather than assuming the extra installed) and fall back to the CPU
   server, so `make install && make serve` still works end-to-end on Apple Silicon
   today — just via CPU/Transformers, not vLLM-Metal. `make serve-mps` remains
-  available to force the Metal path once/if upstream fixes this.
+  available to force the Metal path once/if upstream fixes this. Confirmed (2026-08-20):
+  forcing `--backend mps` and a bare `uv sync --extra metal` both still fail with the
+  identical `nvidia-cudnn-frontend` wheel error — only the CPU path is currently
+  functional on Apple Silicon, full stop.
+
+- **CUDA path — real GPU test, in progress (2026-08-20, on a GCP `g2-standard-4`/L4,
+  see `infra/gcp-gpu-node/docs/training_sop.md` Session 3 for how that box was
+  provisioned).** `uv sync --extra vllm` installs cleanly on Linux (confirms the
+  macOS issue above really is platform-specific, not a project or vLLM-wide bug).
+  Two real startup bugs found while getting a serve attempt healthy, neither specific
+  to this project's code:
+  1. **Python 3.10 venv**: `vllm serve` crashed at model-init time with
+     `TypeError: 'type' object is not subscriptable` inside
+     `flashinfer/comm/fd_exchange.py` (`array.array[int]` used as a type annotation —
+     `array.array` has no `__class_getitem__`, so this only works under deferred
+     annotation evaluation, which that file doesn't opt into). Not something to fix
+     in this project — worked around by re-syncing with a newer interpreter:
+     `uv sync --extra vllm --python 3.12`.
+  2. **Missing C++ toolchain**: past that, `vllm serve` failed again — `flashinfer`
+     JIT-compiles a CUDA sampling kernel via `ninja`+`gcc` on first use, and the GCP
+     `common-cu129-ubuntu-2204-nvidia-580` boot image ships `gcc` without `g++`:
+     `gcc: fatal error: cannot execute 'cc1plus': execvp: No such file or directory`.
+     Same category of gap as `infra/gcp-gpu-node/docs/training_sop.md`'s
+     `python3.10-dev`/`torch.compile` finding — the boot image has a C compiler but
+     not a full build toolchain. Fixed: `sudo apt-get install -y g++`.
+  **Not yet confirmed working end-to-end** — the retry after installing `g++` was
+  still in `torch.compile`/CUDA-graph-capture warmup (this model's first vLLM CUDA
+  cold start took several minutes even for 135M params) when this session paused the
+  test deliberately, to avoid contending for GPU time/memory with the `custom-gpt-153m`
+  training run active on the same box. Next session: re-run
+  `uv run --no-sync python serve.py --backend cuda` in
+  `~/tiny_llm/serving/vllm-smollm2-135m` on that box (both fixes above should already
+  be in place — Python 3.12 venv + `g++` installed) and confirm a real
+  `/v1/chat/completions` response before calling the CUDA path verified.

@@ -960,6 +960,79 @@ box for a safe stop, `make download-checkpoints
 PROJECT_DIR=../../from_scratch/custom-gpt-153m` before any destructive step, `make
 down` to stop billing.
 
+### Teardown ([DONE — full destroy] 2026-08-20)
+
+Explicitly requested — pausing for the day, resuming a later session, not leaving the
+box running unattended overnight (no automated cost guard exists, see Known issues).
+
+Stopped training cleanly using the `STOP_TRAINING` file fallback (not `Ctrl-C` — see
+"Launch" above for why that's the safer choice when output has been redirected/piped):
+```bash
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> 'touch ~/tiny_llm/from_scratch/custom-gpt-153m/checkpoints/STOP_TRAINING'
+```
+Confirmed via the log: `checkpoints/STOP_TRAINING found — stopping gracefully...` /
+`Saved: checkpoints/153m/latest.pt` / no `gpt-train` process left. **Final step:
+31,183/127,933 (24.4%)**, cumulative training time 12:12:16 (mostly local MPS +
+~1.4 hours on the L4, bf16). Best `test_loss` this run: **7.166** at step 31,000 —
+well past the local-only best of 8.103 (step 1,500), consistent with the earlier
+precision diagnosis above (fp16 divergence, bf16 recovery).
+
+**Downloading checkpoints before any destructive step — plain `scp` failed silently,
+worth knowing for next time**: a direct `scp gpu@<ip>:.../latest.pt ./` of the three
+~1.8GB checkpoint files was interrupted by the tool's own 2-minute command timeout
+mid-transfer, and the resulting local file **looked complete (byte count matched) but
+was actually truncated and failed to `torch.load`** — `scp` doesn't reliably resume or
+signal partial failure the way `gcloud storage rsync` does. **Recovered by going
+through the bucket instead of raw `scp`**, using the already-proven path:
+```bash
+# On the box — push the box's own latest checkpoint state to GCS (same command the
+# periodic checkpoint-sync systemd service runs, invoked manually for an immediate,
+# guaranteed-fresh sync rather than waiting up to checkpoint_sync_minutes):
+ssh -i ~/.ssh/id_ed25519 gpu@<ip> 'sudo -u gpu /usr/local/bin/checkpoint-sync.sh --once'
+# -> "[ckpt-sync] ok"
+
+# Locally — the Makefile's own download path (gcloud storage rsync, not scp):
+make download-checkpoints PROJECT_DIR=../../from_scratch/custom-gpt-153m
+```
+This ran past the 2-minute tool timeout too (home internet, not GCP, was the
+bottleneck this time — took ~15+ minutes for 5.1GB) but completed correctly and every
+file verified loadable (`torch.load` + step-number check) afterward. **Lesson: for
+any multi-GB file leaving a GCP box, prefer `gcloud storage rsync` (via the bucket)
+over raw `scp`** — it handles partial/interrupted transfers correctly where `scp`
+silently produced a corrupted-but-plausible-looking file once already this session
+(caught only because this SOP's own habit is to verify with `torch.load` immediately
+after any download, not to trust file size alone).
+
+The small `logs/train_eval_history_153m.csv` (not covered by checkpoint-sync, which
+only syncs the `checkpoints/` prefix) was pulled directly with a plain `scp` instead
+— fine for small files, saved locally as `logs/train_eval_history_153m_gcp.csv` to
+avoid clobbering the separate local-only history file already in that project.
+
+Full teardown, same procedure as prior sessions:
+```bash
+gcloud storage rm --recursive gs://mini-llm-gpu-llm-training-dev-us-central1/153m
+terraform destroy -auto-approve
+```
+6 resources destroyed (instance, bucket, its IAM binding, service account, 2 firewall
+rules) in ~15s, no errors. Verified: `gcloud compute instances list` (0 items),
+`gcloud storage buckets list` (empty), `terraform state list` (empty) — nothing left
+billing. `terraform.tfvars`'s `instance_count` reset to `0` and `zone` left at
+`us-east1-c` (this session's working zone — try it first next time before rotating
+through the fallback list again) to keep the file matching real state, per this
+module's own safety convention (see `make plan` before any future `apply`).
+
+**Next session, to resume**: `make init` (if needed) → `terraform apply -auto-approve
+-var instance_count=0` (recreates bucket/SA/firewall, $0) → `make upload-corpus
+PROJECT_DIR=../../from_scratch/custom-gpt-153m` (note: also re-uploads the unrelated
+14GB `train.full-7b.bin` unless the glob gap in `README.md`'s Known issues is fixed
+first — worth fixing before repeating this) → `make upload-checkpoint
+PROJECT_DIR=../../from_scratch/custom-gpt-153m` (uploads the step-31,183 checkpoint
+just downloaded) → rotate zones starting with `us-east1-c` → resume training with
+`GPT_BATCH_SIZE=4 GPT_GRAD_ACCUM=16 GPT_STEPS=127933 GPT_PRECISION=bf16 uv run
+gpt-train > /tmp/gpt-train.log 2>&1` (plain redirection, not `| tee` — see "Launch"
+above for why) in a detached `tmux` session, using the `STOP_TRAINING` file (not
+`Ctrl-C`) for the next stop.
+
 ## Phase 6 — Day-to-day management
 
 | Situation | Command | Effect |
