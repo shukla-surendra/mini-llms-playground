@@ -18,10 +18,12 @@ dependencies = [
 [project.scripts]
 gpt-config = "gpt.cli.show_config:main"
 gpt-data = "gpt.cli.prepare_data:main"
+gpt-sft-data = "gpt.cli.prepare_sft_data:main"
 gpt-tokenize = "gpt.cli.tokenize_corpus:main"
 gpt-benchmark = "gpt.cli.benchmark:main"
 gpt-audit = "gpt.cli.audit_data:main"
 gpt-train = "gpt.cli.train:main"
+gpt-train-sft = "gpt.cli.train_sft:main"
 gpt-infer = "gpt.cli.infer:main"
 gpt-serve = "gpt.cli.serve:main"
 gpt-eval = "gpt.cli.evaluate:main"

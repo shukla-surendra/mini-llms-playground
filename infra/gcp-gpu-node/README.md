@@ -38,6 +38,11 @@ gcloud services enable compute.googleapis.com storage.googleapis.com \
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519   # if you don't already have one
 ```
 
+New to why this generates *two* files, why the public half is safe to bake into every
+future instance's `authorized_keys` at boot, and how this compares to an AWS EC2 `.pem`
+file's very different-looking (but mechanically identical) key-issuance flow? See
+[`../../../platform-lab/fundamentals/system_design_foundation/00_prerequisite_concepts/26_ssh_keys_and_public_key_cryptography.md`](../../../platform-lab/fundamentals/system_design_foundation/00_prerequisite_concepts/26_ssh_keys_and_public_key_cryptography.md).
+
 ## Quickstart
 
 ```bash

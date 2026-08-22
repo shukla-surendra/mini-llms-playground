@@ -117,6 +117,17 @@ corrupting or forgetting what it already learned.
 | 27 | [Checkpointing and Resuming Training](27_checkpointing_and_resuming_training.md) | **written** |
 | 28 | [Catastrophic Forgetting and Continual Training](28_catastrophic_forgetting_and_continual_training.md) | **written** |
 
+### Part 2D — Interpreting Evaluation Metrics
+
+Appended after the original catalog, same reason as Part 2B/2C: avoids renumbering
+already-written chapters. Belongs right after Chapter 15 in reading order — see "Reading
+order" below. Chapters 4 and 15 both lean on loss/perplexity as the signal to watch during
+training without fully explaining perplexity itself; this chapter is that explanation.
+
+| # | Chapter | Status |
+|---|---|---|
+| 29 | [Perplexity: What It Actually Means and How to Read It](29_perplexity_understanding_and_interpreting_it.md) | **written** |
+
 ### Part 3 — Fine-Tuning: Adapting an Existing Model
 
 What actually happens inside
@@ -188,8 +199,9 @@ after positional encoding in reading order, before moving on to Part 2.
 **If you're following Part 2 (Pretraining) start to finish**: read Chapter 34 (Part 2C)
 immediately after Chapter 12, despite the higher chapter number — it's the practical
 data-pipeline follow-up to "why data dominates," appended after the original catalog to
-avoid renumbering. Then continue 13 → 15, and read Part 2B (25 → 28) right after, before
-moving on to Part 3 (Fine-Tuning) — same appended-after-the-catalog reasoning.
+avoid renumbering. Then continue 13 → 15, read Chapter 29 (Part 2D) right after 15 — the
+perplexity explanation both 4 and 15 assume — and read Part 2B (25 → 28) right after that,
+before moving on to Part 3 (Fine-Tuning) — same appended-after-the-catalog reasoning.
 
 **If you want fine-tuning specifically**: skim Part 1's architecture chapter (10) for
 vocabulary, then go straight to Part 3, run alongside

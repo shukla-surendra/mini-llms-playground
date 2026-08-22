@@ -140,6 +140,61 @@ class TrainConfig:
     demo_prompt: str = "The quick brown fox"
 
 
+@dataclass(frozen=True)
+class SFTConfig:
+    """Post-training hyperparameters — instruction/chat fine-tuning on top of a
+    pretrained base checkpoint, with masked_next_token_loss (data/dataset.py) so
+    gradient comes only from Assistant-turn tokens (data/sft_dataset.py).
+
+    Field names deliberately overlap TrainConfig's (`lr`, `min_lr`, `weight_decay`,
+    `grad_clip_norm`, `batch_size`, `grad_accum_steps`, `steps`) so trainer.py's
+    stateless helpers — lr_for_step, resolve_amp, make_payload — work unmodified
+    against an SFTConfig instance; `steps` here is filled in once the SFT dataset size
+    is known (epochs * batches_per_epoch), not a fixed constant like TrainConfig's.
+
+    `lr` is ~1/10th of TrainConfig's 4e-4: SFT nudges an already-trained base rather
+    than training from random init, so a pretraining-sized LR would undo more of the
+    base model's learned structure than a short few-epoch fine-tune should.
+    """
+
+    lr: float = 5e-5
+    min_lr: float = 5e-6
+    weight_decay: float = 0.1
+    grad_clip_norm: float = 1.0
+    batch_size: int = 16
+    grad_accum_steps: int = 4
+    epochs: int = 3
+    eval_interval: int = 100
+    save_every_steps: int = 200
+    seed: int = 42
+    precision: str = "fp32"  # resolve_amp already falls back to fp32 off CUDA anyway
+    max_new_tokens: int = 120
+
+
+_SFT_ENV_OVERRIDES = {
+    "lr": ("GPT_SFT_LR", float),
+    "min_lr": ("GPT_SFT_MIN_LR", float),
+    "batch_size": ("GPT_SFT_BATCH_SIZE", int),
+    "grad_accum_steps": ("GPT_SFT_GRAD_ACCUM", int),
+    "epochs": ("GPT_SFT_EPOCHS", int),
+    "eval_interval": ("GPT_SFT_EVAL_INTERVAL", int),
+    "save_every_steps": ("GPT_SFT_SAVE_EVERY", int),
+}
+
+
+def resolve_sft_config():
+    """SFTConfig with any `GPT_SFT_*` env overrides applied — same mechanism as
+    resolve_train_config(), so a laptop smoke test needs no code edit:
+    GPT_SFT_EPOCHS=1 gpt-train-sft
+    """
+    overrides = {}
+    for field_name, (env_var, cast) in _SFT_ENV_OVERRIDES.items():
+        raw = os.getenv(env_var)
+        if raw is not None:
+            overrides[field_name] = cast(raw)
+    return replace(SFTConfig(), **overrides) if overrides else SFTConfig()
+
+
 # Named sizes. Parameter counts are computed, never hardcoded, so they cannot drift
 # out of sync with the architecture.
 PRESETS = {
@@ -151,6 +206,11 @@ PRESETS = {
     # This project's own default architecture, straight off ModelConfig's field
     # defaults — never restated, so it cannot drift out of sync with them.
     "153m": ModelConfig(),
+    # Same architecture as "153m" — this alias exists purely to give the SFT run its
+    # own checkpoint namespace (checkpoints/153m-sft/, logs/*_153m-sft.csv) via the
+    # existing Paths(label=...) plumbing, so gpt-qa-report/gpt-infer/etc. work against
+    # SFT checkpoints with zero code changes (--preset 153m-sft).
+    "153m-sft": ModelConfig(),
 }
 
 DEFAULT_PRESET = "153m"

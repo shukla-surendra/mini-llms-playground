@@ -8,6 +8,7 @@ from .dataset import (
     get_batch,
     load_text,
     load_token_array,
+    masked_next_token_loss,
     next_token_loss,
     token_bin_path,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "get_batch",
     "load_text",
     "load_token_array",
+    "masked_next_token_loss",
     "next_token_loss",
     "token_bin_path",
     "load_prompts",

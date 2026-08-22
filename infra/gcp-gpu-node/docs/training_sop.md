@@ -1033,6 +1033,165 @@ gpt-train > /tmp/gpt-train.log 2>&1` (plain redirection, not `| tee` — see "La
 above for why) in a detached `tmux` session, using the `STOP_TRAINING` file (not
 `Ctrl-C`) for the next stop.
 
+## Session 4: resume following the exact Session-3 next-session plan (2026-08-22)
+
+Local training continued unattended after Session 3's teardown — by the time this
+session started, the local checkpoint was already at **step 32,048** (test_loss
+7.166 unchanged, cumulative 14:11:20), ahead of the step-31,183 checkpoint Session 3
+downloaded. This session uploaded and resumed from the newer local checkpoint, not
+the older GCS-stored one — worth noting since the "next session" plan text above was
+written against 31,183 and the actual resume point moved on its own between
+sessions.
+
+### 1. Recreate free infra, `instance_count=0` first
+
+```bash
+terraform init -input=false
+terraform plan -input=false -var instance_count=0   # reviewed before applying
+terraform apply -auto-approve -input=false -var instance_count=0
+```
+5 resources created (bucket, service account, IAM binding, 2 firewall rules), $0.
+Confirmed via `gcloud compute instances list` / `gcloud storage buckets list`
+(instance: 0 items; bucket: present) before touching billing at all.
+
+### 2. Upload corpus + checkpoint — explicit filenames, not the Makefile target
+
+**Deliberately bypassed `make upload-corpus`.** `data/` in this project now also
+holds an unrelated `train.full-7b.bin` (13GB, not referenced anywhere in `src/` —
+confirmed with `grep -rn "full-7b" src/`) sitting next to the real `train.bin`
+(5.5GB). `make upload-corpus`'s fallback path (`gcloud storage cp data/*.bin
+data/*.bin.json ...`, triggered whenever the primary `rsync
+--include-file-pattern=...` call fails) is a plain shell glob with no filter — it
+would silently pull that unrelated 13GB file up too, the same class of bug as the
+`--only-show-errors=false` issue documented above. Confirmed the *Terraform output
+hint* has the identical blind spot (`--exclude='.*\.txt$'` excludes text files, not
+the extra `.bin`), so this isn't only a Makefile issue.
+
+**Fix applied this session — explicit file list, no glob at all:**
+```bash
+gcloud storage cp \
+  data/train.bin data/train.bin.json data/test.bin data/test.bin.json \
+  gs://mini-llm-gpu-llm-training-dev-us-central1/153m/corpus/
+```
+`make upload-checkpoint` was used as-is for the checkpoint side — its `rsync
+--exclude=".*\.DS_Store$"` has no equivalent glob risk (`checkpoints/` only ever
+holds the three legitimate `.pt` files).
+
+Verified before spending anything on compute: `gcloud storage ls -l` against the
+bucket showed all 7 objects with byte counts matching the local files exactly
+(10.71 GiB total: 5.86GB `train.bin`, 143MB `test.bin`, ~1.8GB × 3 checkpoint
+files) — no truncation, and no `train.full-7b.bin` anywhere in the bucket.
+
+### 3. Launch — no zone rotation needed this time
+
+`terraform apply -auto-approve -input=false -var instance_count=1` succeeded on the
+first try, same zone as last session (`us-east1-c`) — no `STOCKOUT`, instance up in
+25s. Public IP `34.148.31.49`.
+
+### 4. Transient bootstrap corpus-sync failure, worked around
+
+The boot log's tail showed `Terminated` immediately followed by `WARN: corpus sync
+failed` — the checkpoint pull succeeded (3 files, 256 MiB/s) but the corpus pull
+did not, leaving `data/` empty on the box. **Not the historical
+`--only-show-errors=false` bug** (that fix is already in the template, and this
+error surfaced differently) — root cause not fully isolated, most likely a
+transient race between the tail end of `uv sync`'s dependency install and the
+corpus rsync starting immediately after on a freshly-booted box, but this wasn't
+confirmed. **Practical fix, not a root-cause fix**: re-ran the exact same rsync by
+hand over SSH —
+```bash
+ssh -i ~/.ssh/id_ed25519 gpu@34.148.31.49 \
+  'gcloud storage rsync "gs://mini-llm-gpu-llm-training-dev-us-central1/153m/corpus/" ~/tiny_llm/from_scratch/custom-gpt-153m/data/ --recursive'
+```
+Succeeded cleanly the second time (253 MiB/s), file sizes verified matching exactly
+afterward. **Lesson for next time**: don't trust the bootstrap log's corpus-sync
+line at face value — verify `ls -la ~/tiny_llm/.../data/` after boot even when the
+log doesn't show an obvious fatal error, since this failure mode produces no
+Python-level error until `gpt-train` itself tries to read a missing file.
+
+Also hit, same session: `uv: command not found` over a plain non-interactive SSH
+command, even though `uv sync` had clearly already run during bootstrap — `uv`
+installs to `~/.local/bin`, which isn't on `PATH` for a non-login SSH shell.
+Fix: `export PATH="$HOME/.local/bin:$PATH"` before any `uv run` invoked this way
+(already the case for whatever sources `.bashrc` on an interactive login, e.g.
+`make ssh` itself — only bit non-interactive one-off SSH commands).
+
+### 5. Verified GPU, then launched
+
+```bash
+nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,power.limit --format=csv
+# -> NVIDIA L4, 23034 MiB, 0 MiB used, 0% util (idle, as expected pre-launch)
+uv run python -c 'import torch; print(torch.cuda.is_available(), torch.cuda.is_bf16_supported())'
+# -> True True
+```
+Launched in a detached `tmux` session (`tmux new-session -d -s train ...`), same
+command as Session 3's documented plan:
+```bash
+GPT_BATCH_SIZE=4 GPT_GRAD_ACCUM=16 GPT_STEPS=127933 GPT_PRECISION=bf16 \
+  uv run gpt-train > /tmp/gpt-train.log 2>&1
+```
+Confirmed clean: `Precision: torch.bfloat16`, `Resumed at step 32048 (cumulative
+14:11:20)`, `Progress: step 32,048/127,933 (25.1%)`, ETA ~42.5 more training-hours
+(~1.8 days) if run continuously, no `Traceback`/OOM in the first several seconds of
+output.
+
+### Where this run stands at end of session
+
+Instance `mini-llm-gpu`, zone `us-east1-c`, `RUNNING`, ~$0.70/hr, **no automated
+cost guard** (same open, unresolved issue as every prior session — manual
+monitoring is still mandatory). Training resumed at step 32,048/127,933 (25.1%),
+bf16. **Left running deliberately** — same in-progress-run reasoning as Session 3.
+To check on it next time: `make ssh` (or the SSH command above) + `tmux attach -t
+train`. To stop safely: `touch
+~/tiny_llm/from_scratch/custom-gpt-153m/checkpoints/STOP_TRAINING` on the box (not
+`Ctrl-C`), then `make download-checkpoints PROJECT_DIR=../../from_scratch/custom-gpt-153m`
+before any destructive step, then `make down`.
+
+### Addendum: installing DCGM (NVIDIA Data Center GPU Manager) — verified working on L4
+
+Not present on this image by default — `systemctl status nvidia-dcgm` /
+`systemctl status dcgm` both report "could not be found" out of the box, and
+`apt-cache search dcgm` returns nothing but unrelated `libnvidia-nscq-*` (NVSwitch)
+libraries until NVIDIA's own CUDA repo is added. The base image ships the driver
+(confirmed `580.173.02`), `nvidia-persistenced` (running), and a
+`nvidia-fabricmanager.service` unit definition (present but `failed` — expected and
+harmless, that daemon manages NVLink/NVSwitch fabric, which a single L4 doesn't have).
+DCGM itself is a separate, opt-in NVIDIA product, mainly useful for feeding the DCGM
+Prometheus exporter at fleet scale — not something a single-box run needs, but tested
+here on request:
+
+```bash
+wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update -qq
+
+# DCGM 4.x, matched to this image's CUDA 12 environment (not the older
+# monolithic `datacenter-gpu-manager` 3.3.9 package, also available in the same repo)
+sudo apt-get install -y datacenter-gpu-manager-4-core datacenter-gpu-manager-4-cuda12
+
+sudo systemctl enable --now nvidia-dcgm
+```
+
+Confirmed working end-to-end, installed and verified *while training was actively
+running* (no disruption — pure apt install, no driver touch, no reboot):
+`dcgmi discovery -l` correctly identified the L4 (name, PCI bus ID, device UUID);
+`dcgmi dmon -e 203,204,252 -c 5` (GPU util / mem-controller util / framebuffer used)
+returned live values matching `nvidia-smi`'s own numbers from the same moment
+(~97-100% GPU util, ~7.5GB VRAM) — cross-validated against a second, independent
+tool, not just "the service started." One incidental convenience: enabling
+`nvidia-dcgm` auto-creates a `dcgm.service` symlink alias, so both service names
+resolve afterward.
+
+Full command reference with exact real outputs — discovery, health checks, `dmon`
+field IDs, and a full live-triage session for the power warning this install
+surfaced — is kept separately at
+[`dcgm_gpu_command_reference.md`](dcgm_gpu_command_reference.md), not duplicated here.
+See also [`nvidia_smi_command_reference.md`](nvidia_smi_command_reference.md) for the
+driver-bundled tool DCGM complements, and
+[`checkpoint_download_command_reference.md`](checkpoint_download_command_reference.md)
+for the exact sync-then-download-then-verify sequence used every time a checkpoint is
+pulled down while training keeps running.
+
 ## Phase 6 — Day-to-day management
 
 | Situation | Command | Effect |

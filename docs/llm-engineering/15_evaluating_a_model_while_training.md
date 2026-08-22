@@ -58,7 +58,8 @@ None of these is sufficient alone — each catches a failure mode the others mis
 4. **Does the generated output actually sound better.** Loss and perplexity are proxies
    for the real goal, not the goal itself. A validation loss that keeps improving without
    the generated text improving alongside it is a sign the proxy has stopped tracking what
-   actually matters.
+   actually matters. (What perplexity actually is, precisely, and why reading it instead
+   of raw loss changes intuition but not information: [Chapter 29](29_perplexity_understanding_and_interpreting_it.md).)
 
 ### A practical stopping rule combining all four
 

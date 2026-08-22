@@ -1,6 +1,7 @@
 .PHONY: help setup config presets books books-force data data-public data-legacy data-legacy-public data-all data-all-public curate-shared tokenize tokenize-force tokenize-legacy tokenize-legacy-force benchmark benchmark-quick benchmark-sweep audit train train-fresh train-bg train-status train-stop train-logs infer serve export-vllm serve-vllm eval test clean
 
 GPT_TRAIN_BIN := $(CURDIR)/.venv/bin/gpt-train
+GPT_TRAIN_SFT_BIN := $(CURDIR)/.venv/bin/gpt-train-sft
 CORPUS_EXTRACTOR := $(CURDIR)/../../tools/corpus-extractor/target/release/corpus-extractor
 
 # Local folder of source books (PDF/EPUB) to extract — override on the command line
@@ -43,6 +44,18 @@ define guard_not_running
 		echo "Two concurrent runs silently race on checkpoints/<label>/ and roughly halve" >&2; \
 		echo "each other's throughput instead of failing loudly." >&2; \
 		echo "Run 'make train-status' to check, or 'make train-stop' to stop it first." >&2; \
+		exit 1; \
+	fi
+endef
+
+# Same protection as guard_not_running, keyed to gpt-train-sft instead — a base
+# pretraining run and an SFT run write to different checkpoints/<label>/ dirs so they
+# can't corrupt each other's checkpoints, but on a single-GPU machine (e.g. this Mac)
+# running both at once still just makes each other slower for no benefit.
+define guard_not_running_sft
+	@if pgrep -f "$(GPT_TRAIN_SFT_BIN)" > /dev/null 2>&1; then \
+		echo "Error: gpt-train-sft is already running (PID(s): $$(pgrep -f "$(GPT_TRAIN_SFT_BIN)" | tr '\n' ' '))." >&2; \
+		echo "Run 'make train-sft-status' to check, or 'make train-sft-stop' to stop it first." >&2; \
 		exit 1; \
 	fi
 endef
@@ -171,6 +184,14 @@ data-legacy-public: setup
 	$(guard_not_symlinked)
 	uv run gpt-data --no-gated $(EXTRA_JSONL_FLAG)
 
+# The SFT (post-training) corpus — same registered chat/instruction datasets as
+# `data`/`data-legacy` above, but written to data/sft/{train,test}.jsonl with turn
+# structure preserved (not collapsed to flat text), since masked loss needs to know
+# exactly which tokens are an Assistant turn's. See data/sft_prepare.py.
+sft-data: setup
+	$(guard_not_symlinked)
+	uv run gpt-sft-data
+
 # The full reproducible pipeline in one command, in the order that matters: extract
 # local sources first (nothing downloads yet), THEN build the merged/shuffled corpus
 # (downloads all registered HF datasets, pools them with the books JSONL, writes
@@ -278,6 +299,46 @@ train-stop:
 
 train-logs:
 	@tail -f logs/train_stdout.log
+
+# Instruction/chat fine-tuning on top of a base checkpoint — see sft_trainer.py.
+# Requires data/sft/{train,test}.jsonl (`make sft-data` first).
+train-sft: setup
+	$(guard_not_running_sft)
+	uv run gpt-train-sft
+
+train-sft-bg: setup
+	$(guard_not_running_sft)
+	@mkdir -p logs
+	@nohup uv run gpt-train-sft > logs/train_sft_stdout.log 2>&1 & \
+	echo "Started in background — PID $$!  Log: logs/train_sft_stdout.log"
+	@echo "Check on it:   make train-sft-status   /   tail -f logs/train_sft_stdout.log"
+	@echo "Stop cleanly:  make train-sft-stop"
+
+train-sft-status:
+	@if pgrep -f "$(GPT_TRAIN_SFT_BIN)" > /dev/null 2>&1; then \
+		echo "Running — PID(s): $$(pgrep -f "$(GPT_TRAIN_SFT_BIN)" | tr '\n' ' ')"; \
+		echo "Last log line:"; \
+		tail -c 2000 logs/train_sft_stdout.log 2>/dev/null | tr '\r' '\n' | grep . | tail -1; \
+	else \
+		echo "Not running."; \
+	fi
+
+# $(or $(GPT_PRESET),153m)-sft matches train_sft.py's own sft_label derivation
+# (base-preset + "-sft"). NOT checkpoints/STOP_TRAINING (train-stop's file) — SFT uses
+# its own namespaced stop file (checkpoints/<label>-sft/STOP_TRAINING, see
+# sft_trainer.py) specifically so this can never also stop an unrelated, concurrently
+# running base `gpt-train` process.
+train-sft-stop:
+	@PID="$$(pgrep -f "$(GPT_TRAIN_SFT_BIN)")"; \
+	if [ -z "$$PID" ]; then \
+		echo "Not running."; \
+	else \
+		mkdir -p checkpoints/$(or $(GPT_PRESET),153m)-sft; \
+		touch checkpoints/$(or $(GPT_PRESET),153m)-sft/STOP_TRAINING; \
+		echo "Sending SIGINT to PID $$PID and dropping"; \
+		echo "checkpoints/$(or $(GPT_PRESET),153m)-sft/STOP_TRAINING as a fallback."; \
+		kill -INT $$PID; \
+	fi
 
 infer: setup
 	uv run gpt-infer

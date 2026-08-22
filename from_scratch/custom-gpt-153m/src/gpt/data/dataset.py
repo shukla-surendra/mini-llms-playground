@@ -298,3 +298,14 @@ def get_batch(tokens, ctx_len, batch_size, device):
 
 def next_token_loss(logits, targets, vocab_size):
     return F.cross_entropy(logits.reshape(-1, vocab_size), targets.reshape(-1))
+
+
+def masked_next_token_loss(logits, labels, vocab_size, ignore_index=-100):
+    """Same next-token cross-entropy as next_token_loss, but positions in `labels`
+    equal to `ignore_index` contribute no gradient — the SFT loss-masking mechanism:
+    only assistant-turn tokens are ever real labels (see data/sft_dataset.py), so the
+    model is updated on its own responses, not on the prompt/user turns it was given.
+    """
+    return F.cross_entropy(
+        logits.reshape(-1, vocab_size), labels.reshape(-1), ignore_index=ignore_index,
+    )

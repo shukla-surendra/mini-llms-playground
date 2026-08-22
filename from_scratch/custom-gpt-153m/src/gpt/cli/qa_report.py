@@ -10,6 +10,7 @@ training.md's Signal #4 ("does the output actually sound better") is meant to be
 
 import argparse
 import html
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,7 +19,7 @@ import torch
 from ..checkpoint import load_model, select_checkpoint
 from ..config import load_settings
 from ..data.sources import DATASETS
-from ..inference import generate_text
+from ..inference import generate_text_batch
 from ..runtime import get_device
 from .qa_prompts import load_categories
 
@@ -43,7 +44,8 @@ def _active_categories(data_dir, prompt_categories, prompt_sources):
 
 
 def _build_html(*, label, param_count, checkpoint_path, step, configured_steps,
-                 best_test_loss, generation_settings, results, generated_at, skipped):
+                 best_test_loss, generation_settings, results, generated_at, skipped,
+                 generation_seconds, prompt_count):
     progress_pct = (100.0 * step / configured_steps) if configured_steps else None
     progress_str = f"{progress_pct:.1f}%" if progress_pct is not None else "n/a"
     best_loss_str = f"{best_test_loss:.4f}" if best_test_loss is not None else "n/a"
@@ -55,6 +57,11 @@ def _build_html(*, label, param_count, checkpoint_path, step, configured_steps,
         f"<br>skipped (source not in this checkpoint's training corpus): "
         f"<code>{html.escape(', '.join(skipped))}</code>"
         if skipped else ""
+    )
+    per_prompt = generation_seconds / prompt_count if prompt_count else 0.0
+    timing_str = (
+        f"{generation_seconds:.1f}s for {prompt_count} prompts "
+        f"({per_prompt:.2f}s/prompt avg)"
     )
 
     sections = []
@@ -104,6 +111,7 @@ def _build_html(*, label, param_count, checkpoint_path, step, configured_steps,
     (step <code>{step}</code> / <code>{configured_steps:,}</code> configured &mdash; {progress_str}
     of the training budget) &nbsp;·&nbsp; best_test_loss: <code>{best_loss_str}</code><br>
     generation: {settings_str}<br>
+    generation time: <code>{timing_str}</code><br>
     generated: {html.escape(generated_at)}{skipped_html}
   </div>
   {"".join(sections)}
@@ -130,6 +138,11 @@ def main():
     parser.add_argument("--per-category-limit", type=int, default=None,
                          help="Cap prompts per category, for a faster subset run "
                               "(default: run every prompt in every active category)")
+    parser.add_argument("--batch-size", type=int, default=8,
+                         help="Prompts generated per shared forward pass (see "
+                              "generate_text_batch in inference/generate.py). Larger "
+                              "is faster per-prompt up to whatever fits in memory; "
+                              "output is unaffected by this choice.")
     parser.add_argument("--out", default=None,
                          help="Output HTML path (default: reports/qa_report_<label>_step<N>.html)")
     parser.add_argument("--checkpoint", choices=["best", "latest", "final"], default=None,
@@ -146,6 +159,14 @@ def main():
 
     _, train_cfg, paths, label = load_settings(args.preset)
     device = get_device()
+    if device != "cuda":
+        print(
+            f"Device: {device} — no CUDA GPU detected locally, generation will run "
+            f"noticeably slower than on the training box. See get_device() in "
+            f"src/gpt/runtime.py for the cuda -> mps -> cpu fallback order."
+        )
+    else:
+        print(f"Device: {device}")
     checkpoint_path = select_checkpoint(paths, args.checkpoint)
     checkpoint, tokenizer, model = load_model(checkpoint_path, device)
     step = checkpoint.get("step", 0)
@@ -172,27 +193,50 @@ def main():
         print(f"Skipped (source not found under {paths.data_dir / 'raw'}): {', '.join(skipped)}")
     print()
 
-    results = []
-    for category, questions in categories:
-        answered = []
-        for question in questions:
-            prompt = f"User: {question}\nAssistant:"
-            _, answer = generate_text(
-                model=model,
-                tokenizer=tokenizer,
-                prompt=prompt,
-                context_length=checkpoint["context_length"],
-                max_new_tokens=args.max_new_tokens,
-                device=device,
-                do_sample=not args.greedy,
-                temperature=args.temperature,
-                top_k=args.top_k,
-                top_p=args.top_p,
-                repetition_penalty=args.repetition_penalty,
-                postprocess=True,
-            )
+    # Flatten to one ordered (category, question) list so batches can be filled across
+    # category boundaries (a category with 3 leftover prompts doesn't run its own
+    # near-empty batch) — grouping back into `results` below is just a index replay.
+    flat = [(category, question) for category, questions in categories for question in questions]
+    answers = [None] * len(flat)
+    gen_start = time.perf_counter()
+    for start in range(0, len(flat), args.batch_size):
+        chunk = flat[start:start + args.batch_size]
+        prompts = [f"User: {question}\nAssistant:" for _, question in chunk]
+        batch_start = time.perf_counter()
+        batch_out = generate_text_batch(
+            model=model,
+            tokenizer=tokenizer,
+            prompts=prompts,
+            context_length=checkpoint["context_length"],
+            max_new_tokens=args.max_new_tokens,
+            device=device,
+            do_sample=not args.greedy,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            repetition_penalty=args.repetition_penalty,
+            postprocess=True,
+        )
+        batch_elapsed = time.perf_counter() - batch_start
+        for offset, ((category, question), (_, answer)) in enumerate(zip(chunk, batch_out)):
             print(f"[{category}]\n  Q: {question}\n  A: {answer}\n")
-            answered.append((question, answer))
+            answers[start + offset] = answer
+        print(
+            f"  batch {start // args.batch_size + 1} "
+            f"({len(chunk)} prompts): {batch_elapsed:.1f}s "
+            f"({batch_elapsed / len(chunk):.2f}s/prompt)\n"
+        )
+    gen_elapsed = time.perf_counter() - gen_start
+    print(
+        f"Generation done: {gen_elapsed:.1f}s total for {len(flat)} prompts "
+        f"({gen_elapsed / len(flat):.2f}s/prompt avg, batch_size={args.batch_size})"
+    )
+
+    results = []
+    idx = 0
+    for category, questions in categories:
+        answered = [(question, answers[idx + i]) for i, question in enumerate(questions)]
+        idx += len(questions)
         results.append((category, answered))
 
     out_path = Path(args.out) if args.out else Path("reports") / f"qa_report_{label}_step{step}.html"
@@ -208,6 +252,8 @@ def main():
         results=results,
         generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         skipped=skipped,
+        generation_seconds=gen_elapsed,
+        prompt_count=len(flat),
     ), encoding="utf-8")
 
     print(f"saved_report: {out_path}")
