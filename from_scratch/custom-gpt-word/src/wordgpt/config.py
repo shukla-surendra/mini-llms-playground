@@ -16,6 +16,10 @@ class GPTConfig:
 class TrainConfig:
     batch_size: int = 16
     learning_rate: float = 3e-3
-    max_steps: int = 1_000
-    eval_interval: int = 100
+    # One pass over the ~15.29M-token corpus: tokens / (batch_size * block_size)
+    # = 15,288,804 / (16 * 12) ~= 79,629 steps. The old default (1_000) was sized for
+    # the original hand-written "the cat sat" corpus and only covered 1.3% of the
+    # current one.
+    max_steps: int = 79_629
+    eval_interval: int = 2_000
     eval_iters: int = 20

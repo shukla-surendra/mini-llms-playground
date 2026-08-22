@@ -10,6 +10,7 @@ text -> ids -> embeddings -> logits -> text.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from pathlib import Path
 
 TOKEN_PATTERN = re.compile(r"[a-z]+(?:'[a-z]+)?|[.,!?;:]", re.IGNORECASE)
@@ -24,8 +25,20 @@ class WordTokenizer:
     useful limitation to notice; real tokenizers avoid it with subword pieces.
     """
 
-    def __init__(self, text: str) -> None:
-        words = sorted(set(self.tokenize(text)))
+    def __init__(self, text: str, max_vocab_size: int | None = None) -> None:
+        counts = Counter(self.tokenize(text))
+        if max_vocab_size is None:
+            words = sorted(counts)
+        else:
+            # Without a cap, every distinct string in the corpus becomes a permanent
+            # token_emb row - fine for a hand-picked "the cat sat" corpus, but on real
+            # book/PDF text most of the "vocabulary" ends up being one-off extraction
+            # noise (broken hyphenation, glued words, OCR/font glyph errors). Keeping
+            # only the most frequent words both bounds the embedding table and drops
+            # that noise, since it's almost always the rarest "words" in the corpus.
+            keep = max(0, max_vocab_size - len(SPECIAL_TOKENS))
+            most_common = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:keep]
+            words = sorted(word for word, _ in most_common)
         self.tokens = list(SPECIAL_TOKENS) + words
         self.stoi = {token: i for i, token in enumerate(self.tokens)}
         self.itos = {i: token for token, i in self.stoi.items()}
@@ -51,5 +64,5 @@ class WordTokenizer:
         return output.strip()
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "WordTokenizer":
-        return cls(Path(path).read_text(encoding="utf-8"))
+    def from_file(cls, path: str | Path, max_vocab_size: int | None = None) -> "WordTokenizer":
+        return cls(Path(path).read_text(encoding="utf-8"), max_vocab_size=max_vocab_size)

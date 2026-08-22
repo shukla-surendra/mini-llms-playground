@@ -20,6 +20,7 @@ make config
 make dry-run
 make train
 make generate PROMPT="the cat"
+make eval
 ```
 
 `make dry-run` is the safest first step. It performs one genuine forward pass, loss
@@ -71,6 +72,10 @@ If Q/K/V attention is new, start with the dedicated
 [`Causal Q/K/V attention guide`](docs/CAUSAL_QKV_ATTENTION.md). It progresses from a
 plain-language analogy through a worked `the cat sat` example to the exact tensors and
 lines of code used by this project.
+
+For a class-by-class, top-to-bottom read of `model.py` itself — residual connections,
+the two embedding tables, weight tying, and the full shape trace through `forward()` —
+see [`docs/MODEL_WALKTHROUGH.md`](docs/MODEL_WALKTHROUGH.md).
 
 ## Boundaries worth knowing
 
