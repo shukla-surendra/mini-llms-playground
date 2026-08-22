@@ -120,7 +120,7 @@ def _tokenize_conversation(turns, tokenizer, context_length):
     )
 
 
-def make_sft_batch(examples, indices, device, pad_id):
+def make_sft_batch(examples, indices, device, pad_id, fixed_len=None):
     """Build one right-padded, masked training batch from examples[indices].
 
     Returns (x, y, attn_mask):
@@ -134,9 +134,21 @@ def make_sft_batch(examples, indices, device, pad_id):
     content for every row, so there is no fully-masked-query-row NaN case to guard
     against here — that guard in generate_text_batch exists specifically for
     left-padding's empty-prefix rows, which right-padded training batches never have.
+
+    `fixed_len` (recommended for MPS): pad every batch to this SAME length instead of
+    each batch's own max. This corpus's example lengths vary hugely (22-1024 tokens),
+    so per-batch dynamic padding gives nearly every step a different tensor shape —
+    MPS's caching allocator does not coalesce/reclaim old-shape blocks the way CUDA's
+    does, so allocation grows effectively unbounded across a shape-varying run
+    (observed: MPS OOM after ~11-23GB of accumulated allocation training a 153M model
+    at batch_size=2, which should need a small fraction of that). A single constant
+    shape for the whole run means MPS allocates once and reuses it — this is the
+    documented fix, not a workaround. sft_trainer.py passes fixed_len=ctx_len; leave it
+    None only on backends without this issue (e.g. CUDA), where per-batch dynamic
+    padding is the more efficient default.
     """
     batch = [examples[i] for i in indices]
-    max_len = max(len(ids) for ids, _ in batch)
+    max_len = fixed_len if fixed_len is not None else max(len(ids) for ids, _ in batch)
 
     ids_padded = np.full((len(batch), max_len), pad_id, dtype=np.int64)
     valid = np.zeros((len(batch), max_len), dtype=bool)

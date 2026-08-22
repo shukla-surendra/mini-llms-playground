@@ -169,6 +169,15 @@ class SFTConfig:
     seed: int = 42
     precision: str = "fp32"  # resolve_amp already falls back to fp32 off CUDA anyway
     max_new_tokens: int = 120
+    # None = use the base checkpoint's full context_length (1024). sft_trainer.py pads
+    # every batch to a FIXED shape (not each batch's own dynamic max) specifically to
+    # avoid MPS's caching allocator growing unbounded across this corpus's wide length
+    # range (22-1024 tokens/example) — see sft_dataset.py's make_sft_batch docstring.
+    # That means every step costs the SAME as a full-length one regardless of actual
+    # content; on constrained local hardware, capping this lower (e.g. 512) trades
+    # truncating the longest examples' earliest turns for meaningfully less
+    # per-step compute and memory. Ignored above the checkpoint's own context_length.
+    max_seq_len: int | None = None
 
 
 _SFT_ENV_OVERRIDES = {
@@ -179,6 +188,7 @@ _SFT_ENV_OVERRIDES = {
     "epochs": ("GPT_SFT_EPOCHS", int),
     "eval_interval": ("GPT_SFT_EVAL_INTERVAL", int),
     "save_every_steps": ("GPT_SFT_SAVE_EVERY", int),
+    "max_seq_len": ("GPT_SFT_MAX_SEQ_LEN", int),
 }
 
 

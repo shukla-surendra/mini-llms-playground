@@ -50,7 +50,7 @@ def append_eval_history(path, row):
 
 
 @torch.no_grad()
-def estimate_sft_loss(model, examples, sft_cfg, device, pad_id, eval_batches=10):
+def estimate_sft_loss(model, examples, sft_cfg, device, pad_id, fixed_len, eval_batches=10):
     model.eval()
     if not examples:
         model.train()
@@ -61,13 +61,15 @@ def estimate_sft_loss(model, examples, sft_cfg, device, pad_id, eval_batches=10)
     for i in range(eval_batches):
         start = (i * sft_cfg.batch_size) % max(n, 1)
         idx = [(start + j) % n for j in range(min(sft_cfg.batch_size, n))]
-        x, y, attn_mask = make_sft_batch(examples, idx, device, pad_id)
+        x, y, attn_mask = make_sft_batch(examples, idx, device, pad_id, fixed_len=fixed_len)
         with torch.autocast(device_type=device_type,
                             dtype=amp_dtype or torch.float32,
                             enabled=amp_dtype is not None):
             logits = model(x, attn_mask=attn_mask)
             loss = masked_next_token_loss(logits, y, model.token_emb.num_embeddings)
         losses.append(loss.item())
+        if device == "mps":
+            torch.mps.empty_cache()
     model.train()
     return sum(losses) / len(losses)
 
@@ -90,11 +92,23 @@ def train_sft(base_checkpoint_path, model_cfg, sft_cfg, paths, base_paths, label
         load_path, device, eval_mode=False, force_attn_impl="sdpa",
     )
     model.train()
-    ctx_len = checkpoint["context_length"]
+    # model_ctx_len is the REAL architecture — the model's actual pos_emb table size —
+    # and must be what every checkpoint save records (make_payload's context_length
+    # below), never anything smaller. seq_cap is a separate, purely-local concept: how
+    # long an SFT training example is allowed to be before truncation/padding, capped
+    # lower for memory reasons on constrained hardware (see SFTConfig.max_seq_len).
+    # Conflating the two previously corrupted saved checkpoints: a payload saved with
+    # context_length=seq_cap (e.g. 512) while model_state_dict's pos_emb.weight stayed
+    # the real, unshrunk 1024-size tensor — load_model() then rebuilds a 512-size model
+    # from that false metadata and fails loading the real 1024-size weights into it.
+    model_ctx_len = checkpoint["context_length"]
+    seq_cap = model_ctx_len
+    if sft_cfg.max_seq_len is not None:
+        seq_cap = min(seq_cap, sft_cfg.max_seq_len)
     pad_id = tokenizer.eot_token
 
-    train_examples = load_sft_examples(paths.data_dir / "sft" / "train.jsonl", tokenizer, ctx_len)
-    test_examples = load_sft_examples(paths.data_dir / "sft" / "test.jsonl", tokenizer, ctx_len)
+    train_examples = load_sft_examples(paths.data_dir / "sft" / "train.jsonl", tokenizer, seq_cap)
+    test_examples = load_sft_examples(paths.data_dir / "sft" / "test.jsonl", tokenizer, seq_cap)
     if not train_examples:
         raise ValueError(
             f"No usable SFT training examples under {paths.data_dir / 'sft'} — "
@@ -135,7 +149,7 @@ def train_sft(base_checkpoint_path, model_cfg, sft_cfg, paths, base_paths, label
     def payload(step, current_best):
         return make_payload(
             model=model, optimizer=optimizer, model_cfg=model_cfg, train_cfg=sft_cfg,
-            context_length=ctx_len, step=step, best_test_loss=current_best,
+            context_length=model_ctx_len, step=step, best_test_loss=current_best,
             processed_tokens=checkpoint.get("processed_tokens", 0),
             total_training_seconds=elapsed(), label=label,
         )
@@ -177,8 +191,8 @@ def train_sft(base_checkpoint_path, model_cfg, sft_cfg, paths, base_paths, label
                 break
 
             if step % sft_cfg.eval_interval == 0 or step == total_micro_steps - 1:
-                test_loss = estimate_sft_loss(model, test_examples, sft_cfg, device, pad_id)
-                train_probe = estimate_sft_loss(model, train_examples, sft_cfg, device, pad_id)
+                test_loss = estimate_sft_loss(model, test_examples, sft_cfg, device, pad_id, seq_cap + 1)
+                train_probe = estimate_sft_loss(model, train_examples, sft_cfg, device, pad_id, seq_cap + 1)
                 improved = test_loss < best_test_loss
                 if improved:
                     best_test_loss = test_loss
@@ -203,13 +217,26 @@ def train_sft(base_checkpoint_path, model_cfg, sft_cfg, paths, base_paths, label
 
             batch_idx = epoch_order[pos_in_epoch * sft_cfg.batch_size:
                                      (pos_in_epoch + 1) * sft_cfg.batch_size]
-            x, y, attn_mask = make_sft_batch(train_examples, batch_idx, device, pad_id)
+            x, y, attn_mask = make_sft_batch(train_examples, batch_idx, device, pad_id, fixed_len=seq_cap + 1)
             with torch.autocast(device_type=amp_device_type,
                                 dtype=amp_dtype or torch.float32,
                                 enabled=amp_dtype is not None):
                 logits = model(x, attn_mask=attn_mask)
                 loss = masked_next_token_loss(logits, y, model.token_emb.num_embeddings)
             (loss / sft_cfg.grad_accum_steps).backward()
+
+            # MPS-specific: unlike pretraining's fixed-shape random windows, SFT's
+            # dynamic per-batch padding (make_sft_batch pads to each batch's own max
+            # length, and this corpus ranges from 22 to 1024 tokens/example) means
+            # nearly every step allocates a new tensor shape. MPS's caching allocator
+            # does not coalesce/reclaim old-shape blocks the way CUDA's does, so
+            # allocation grows essentially unbounded across shape-varying steps
+            # (observed: ~23GB after 45 steps of a batch_size=2 153M-param model,
+            # which should need a small fraction of that) until MPS OOMs. Releasing
+            # the cache every step is the documented workaround for this MPS
+            # allocator behavior; harmless no-op on cuda/cpu.
+            if device == "mps":
+                torch.mps.empty_cache()
 
             is_accum_boundary = (step + 1) % sft_cfg.grad_accum_steps == 0
             is_final_step = step == total_micro_steps - 1
@@ -249,7 +276,7 @@ def train_sft(base_checkpoint_path, model_cfg, sft_cfg, paths, base_paths, label
     final_step = last_step
     final_payload = make_payload(
         model=model, optimizer=optimizer, model_cfg=model_cfg, train_cfg=sft_cfg,
-        context_length=ctx_len, step=final_step, best_test_loss=best_test_loss,
+        context_length=model_ctx_len, step=final_step, best_test_loss=best_test_loss,
         processed_tokens=checkpoint.get("processed_tokens", 0),
         total_training_seconds=final_total_seconds, label=label,
     )
@@ -265,7 +292,7 @@ def train_sft(base_checkpoint_path, model_cfg, sft_cfg, paths, base_paths, label
         model.eval()
         prompt = f"User: {demo_prompt}\nAssistant:"
         _, completion = generate_text(
-            model=model, tokenizer=tokenizer, prompt=prompt, context_length=ctx_len,
+            model=model, tokenizer=tokenizer, prompt=prompt, context_length=model_ctx_len,
             max_new_tokens=sft_cfg.max_new_tokens, device=device, do_sample=True,
             temperature=0.7, top_k=40, top_p=0.9, repetition_penalty=1.1,
         )
