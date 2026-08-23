@@ -75,6 +75,42 @@ wherever it's being loaded, without any manual per-tensor conversion. This is wh
 the "train on a GPU box, sync the checkpoint directory, resume on a laptop" workflow a
 matter of copying files, not a code change.
 
+### One file or many? Checkpointing under distributed training
+
+Every checkpoint this repo writes is a single file because every training run in this
+repo is single-process — there is only ever one `state_dict` to save. Once training is
+distributed ([Chapter 26](26_distributed_training_ddp_and_fsdp.md)), the checkpoint format
+has to follow whatever split the parallelism strategy already made:
+
+- **DDP**: every rank holds an identical full replica, so saving from rank 0 alone is
+  sufficient — still one file.
+- **FSDP/ZeRO, gathered mode**: ranks temporarily all-gather the full parameters onto one
+  rank before saving — still one file, but requires that one rank to momentarily hold the
+  entire model again, which defeats the purpose of sharding for a model too big to fit
+  that way in the first place.
+- **FSDP/ZeRO, sharded mode**: each rank saves its own shard directly — one file *per
+  rank*, the standard approach for genuinely large models. DeepSpeed's ZeRO checkpoints
+  look exactly like this: a directory of per-rank optimizer/model shard files, plus a
+  `zero_to_fp32.py` script whose entire job is consolidating those shards back into one
+  file for downstream use (serving, or a simple single-process load).
+- **Tensor / pipeline parallelism**: each rank naturally owns a distinct slice (of a
+  layer, or of the layer stack) — checkpointing is naturally per-rank here too.
+
+One practical trap worth naming explicitly: **Hugging Face's sharded model format**
+(`model-00001-of-0000N.safetensors` plus an `index.json` mapping parameter names to shard
+files) looks identical in shape to a distributed-training checkpoint, but is usually
+unrelated to it — it is a post-hoc split done purely for file-size/download limits,
+applied after training regardless of how many GPUs actually trained the model. A model
+trained on one GPU can ship as 5 shard files; a model trained on 64 GPUs can ship as 1
+file if someone consolidated it first. File count alone does not reveal training topology.
+
+The practical consequence: a simple, single-process load-and-generate script — like this
+repo's own `inference.py`/`generate()` calls, which expect one `state_dict` in one file —
+only works directly against a *consolidated* single-file checkpoint. A sharded
+distributed checkpoint either needs loading back into the same distributed setup, or an
+explicit consolidation step first. That step is a real part of the pipeline, not an
+afterthought to skip.
+
 ## Grounded in This Repo's Code
 
 [`from_scratch/custom-gpt-10m/src/gpt/checkpoint.py`](../../from_scratch/custom-gpt-10m/src/gpt/checkpoint.py)'s
@@ -150,6 +186,10 @@ improvement.
 3. Give a concrete scenario where `latest` and `best` would point at two different steps
    at the same moment in a training run, and explain why that's the correct, intended
    behavior rather than a bug.
+4. A model was trained with FSDP across 8 GPUs using sharded-state-dict mode. Explain why
+   `torch.load()` on a single one of the resulting shard files would not give you a usable
+   model, and what step is needed before this repo's own single-process `generate()`-style
+   loading code could use it.
 
 ## Key Terms
 
@@ -161,3 +201,8 @@ improvement.
   tensors to a target device, making checkpoints portable across CPU/CUDA/MPS.
 - **`best` vs. `latest` checkpoint**: two different save policies protecting against two
   different failures — losing recent progress, and serving a temporary regression.
+- **Sharded checkpoint**: a distributed-training checkpoint saved as one file per rank
+  rather than gathered onto one, avoiding the requirement that any single process ever
+  hold the full model — the standard format for models too large to fit on one device,
+  and the reason a consolidation step (e.g. DeepSpeed's `zero_to_fp32.py`) is often
+  needed before simple single-process inference code can use it.

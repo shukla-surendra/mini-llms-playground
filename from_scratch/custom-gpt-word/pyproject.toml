@@ -12,6 +12,7 @@ word-gpt-dry-run = "wordgpt.dry_run:main"
 word-gpt-train = "wordgpt.train:main"
 word-gpt-generate = "wordgpt.generate:main"
 word-gpt-eval = "wordgpt.evaluate:main"
+word-gpt-distill = "wordgpt.distill:main"
 
 [build-system]
 requires = ["hatchling"]

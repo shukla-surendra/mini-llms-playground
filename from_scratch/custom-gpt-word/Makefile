@@ -1,4 +1,4 @@
-.PHONY: help setup config dry-run train generate eval clean
+.PHONY: help setup config dry-run train generate eval distill clean
 
 help:
 	@echo "custom-gpt-word — targets:"
@@ -8,6 +8,7 @@ help:
 	@echo "  make train                         # train and save checkpoints/word-gpt.pt"
 	@echo "  make generate PROMPT='the cat'     # continue a prompt after training"
 	@echo "  make eval                          # score checkpoints/word-gpt.pt on held-out data"
+	@echo "  make distill                       # generate synthetic text from a local Ollama teacher"
 	@echo "  make clean                         # remove the generated checkpoint"
 
 setup:
@@ -27,6 +28,9 @@ generate:
 
 eval:
 	uv run word-gpt-eval
+
+distill:
+	uv run word-gpt-distill
 
 clean:
 	rm -f checkpoints/word-gpt.pt

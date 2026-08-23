@@ -147,6 +147,62 @@ unresolved gap in this repo's own configuration, flagged in that project's own `
 comment as something to fix (raise `steps` toward ~215,000) before a real training run,
 not a mistake to imitate.
 
+### Worked example: what does $100 on L4 GPUs actually buy?
+
+Turning the ratio above into a real answer means converting a dollar budget into a FLOP
+budget, then solving `C ≈ 6ND` (with `D ≈ 20N`, so `C ≈ 120N²`) for `N`.
+
+**Budget → GPU-hours.** L4 pricing varies by provider and spot-vs-on-demand: roughly
+$0.22/hr (GCP spot) to $0.80/hr (typical on-demand). $100 buys 125–455 GPU-hours
+depending which.
+
+**GPU-hours → compute.** L4's peak dense BF16 is 242 TFLOPS, but real training throughput
+lands at 20–40% Model FLOPs Utilization (MFU) — L4 is a 300GB/s-memory-bandwidth card
+(roughly 1/7th an A100's), and training is memory-bandwidth-bound per FLOP, not just
+FLOP-bound, so peak specs are never realistic.
+
+**Compute → N.** Solving `N = sqrt(C / 120)` across that price/MFU range lands
+consistently in the **400M–1B parameter** range — roughly 500–700M as the realistic
+planning number (on-demand pricing, first-attempt MFU), ~1B as an optimistic ceiling
+(aggressive spot pricing, well-tuned run).
+
+**The single-GPU sanity check this chapter's own memory math makes possible.** Does a
+500M–1B model even need [Chapter 26](26_distributed_training_ddp_and_fsdp.md)'s multi-GPU
+strategies? At 16 bytes/param (mixed-precision AdamW), that is 8–16GB of static state —
+it fits on *one* 24GB L4. The multi-GPU discussion only becomes load-bearing past roughly
+1.2B params on a single L4 (16GB+ static, no room left for activations). A $100 budget on
+this hardware doesn't reach the regime where sharding is *necessary* — it reaches the
+regime where sharding is merely *available* — and splitting across multiple L4s (no
+NVLink, PCIe-only interconnect) would eat into the already-modest MFU further, making one
+well-utilized L4 the better $/model choice here, not a multi-GPU setup.
+
+**Why Chinchilla-optimal isn't the only valid target.** The `N` above assumes the whole
+budget funds one clean, compute-optimal run. Real small-model releases routinely ignore
+the 20:1 ratio on purpose: SmolLM2 (~1.7B params) was trained on roughly 11 trillion
+tokens — **over 6,000 tokens/parameter**, not 20. The reason: training cost is paid once,
+inference cost is paid forever, so a model meant to be *served* a lot is worth
+over-training well past compute-optimal in exchange for a smaller, cheaper-to-run final
+size. "The biggest model my $100 can Chinchilla-optimally train" and "the best model my
+$100 lets me keep querying afterward" are different optimization targets that land on
+different `N` — this chapter's ratio is a starting point for that decision, not a verdict.
+
+**What that size model can actually do, and why context length is a separate question
+from parameter count.** Real ~1B-class open models (Llama-3.2-1B, SmolLM2) land around
+45–57% on instruction-following/grade-school-math benchmarks and meaningfully lower on
+harder reasoning — competent at narrow, well-scoped tasks (instruction-following,
+summarization, context-grounded QA), weak at multi-step reasoning and broad factual
+recall, a hard function of how many facts 1B parameters can physically store, not a
+training-recipe fix. Context length, separately, is an architecture choice, not a
+consequence of parameter count — see [Chapter 21](21_inference_mechanics_decoding_sampling_and_kv_cache.md)
+for the KV-cache mechanism a long context depends on at serving time. Grouped-query
+attention (fewer KV heads than query heads) is what makes a long context's KV-cache
+memory affordable at all; this repo's own `custom-gpt-word` project's hand-written
+attention (full multi-head, an explicit `(B,H,T,T)` score matrix, no GQA) is a concrete,
+small-scale illustration of the *un*-optimized version of both problems — no GQA to
+shrink the KV-cache side, and `O(T²)` memory in the attention computation itself, which is
+exactly why that project's own `block_size=12` is a sane choice and not an arbitrary small
+number.
+
 ## Grounded in This Repo's Code
 
 Every number above comes from a real, callable function, not a spreadsheet alongside the
@@ -277,6 +333,11 @@ moment data quality, not compute allocation, becomes the actual bottleneck.
 4. Chinchilla's own experiments were run at 70M–16B parameters. What, specifically, makes
    it reasonable to still use its ~20:1 ratio as a *heuristic* for a 5.85M-parameter model,
    and what would make you doubt the ratio still applies well at that much smaller scale?
+5. A $100 GPU budget solves out to a ~700M-parameter Chinchilla-optimal model. Using the
+   16-bytes/param memory math from [Chapter 26](26_distributed_training_ddp_and_fsdp.md),
+   determine whether that model requires FSDP/multi-GPU sharding to train on a single
+   24GB GPU, and explain why "the model doesn't fit" is a different question from
+   "training would be faster with more GPUs."
 
 ## Key Terms
 
@@ -300,3 +361,7 @@ moment data quality, not compute allocation, becomes the actual bottleneck.
 - **Tokens-per-parameter ratio**: total training tokens (`steps × batch_size ×
   context_length`) divided by a model's parameter count — the practical, code-computable
   form of the Chinchilla ratio used throughout this repo's own `TrainConfig` docstrings.
+- **Model FLOPs Utilization (MFU)**: the fraction of a GPU's peak theoretical FLOPS
+  actually achieved during real training — typically 20-50%, since training is often
+  memory-bandwidth-bound rather than purely compute-bound, which is why a compute budget
+  calculated from peak specs alone overstates what's actually achievable.

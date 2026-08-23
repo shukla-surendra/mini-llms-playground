@@ -121,6 +121,27 @@ you want for a distillation target. [Chapter 18](18_instruction_tuning_and_sft.m
 per-turn loss masking as the standard fix; it isn't currently implemented in this
 project's trainer, so it's a real, named gap rather than something to assume works today.
 
+## A real, working example: `custom-gpt-distill-10m`
+
+Unlike the illustrative snippet below, [`from_scratch/custom-gpt-distill-10m`](../../from_scratch/custom-gpt-distill-10m/)
+is a real project built entirely around this chapter's pipeline plus
+[Chapter 32](32_knowledge_distillation_mechanism_by_mechanism.md)'s soft-label
+mechanism, both actually implemented, not sketched:
+
+- **Sequence-level** (`gpt-distill`, `src/gpt/cli/distill.py`): queries a local Ollama
+  teacher (`gemma3:4b`, Google's Gemma license explicitly permits distillation — see
+  this doc's Trade-offs table) for instruction/response pairs, appending them to
+  `data/corpus/train.txt`/`test.txt` across repeated runs.
+- **Soft-label** (`gpt-train-soft`, `src/gpt/cli/train_soft.py`): loads real
+  `gpt2-medium` (OpenAI's actual released weights, Modified MIT license, and — because
+  this project deliberately uses the identical `tiktoken` `gpt2` tokenizer — a genuine
+  logit-level match, no vocabulary-bridging needed) as a teacher running in eval/no-grad
+  mode alongside the student, computing the blended hard/soft loss from this chapter's
+  `distillation_loss` on the exact same corpus.
+
+The two are independent, runnable on the same corpus, and directly comparable via
+`gpt-eval` — not a hypothetical "here's how you'd wire this in."
+
 ## Grounded in This Repo's Code: adding a distilled source
 
 Illustrative — not currently wired into `data/sources.py`, but shaped to match it exactly:

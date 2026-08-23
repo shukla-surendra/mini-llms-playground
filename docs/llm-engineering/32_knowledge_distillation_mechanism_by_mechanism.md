@@ -103,6 +103,35 @@ smaller/vision-adjacent architectures, precisely because they need internal acce
 today's most capable LLMs (accessed via API) simply don't expose. They're mentioned here
 for the full landscape, not because this curriculum's own projects use them.
 
+### The capacity gap: why student/teacher size ratio isn't free to ignore
+
+Soft-label distillation asks the student to represent the teacher's *entire*
+probability distribution shape at every position, not just imitate one output — which
+means, unlike sequence-level distillation, the size gap between student and teacher is
+a real mechanism-level constraint, not just "bigger teacher is always better." Named,
+real examples cluster in a fairly narrow band:
+
+| Distilled model | Student | Teacher | Compression ratio |
+|---|---:|---:|---:|
+| DistilBERT | 66M | BERT-base 110M | ~1.7x |
+| DistilGPT2 | 82M | GPT-2 124M | ~1.5x |
+| TinyBERT (aggressive case) | 14.5M | BERT-base 110M | ~7.5x |
+| MobileBERT | 25M | BERT-large 340M | ~14x |
+
+Push the ratio well past this band and there's a documented *failure mode*, not just
+weaker transfer: Mirzadeh et al.'s 2019 **"Improved Knowledge Distillation via Teacher
+Assistant"** found that beyond a certain student/teacher size gap, soft-label
+distillation quality can get **worse**, not merely diminish, because the student
+literally lacks the capacity to represent the shape the teacher's distribution is
+asking it to match — their fix was inserting an intermediate-sized "teaching assistant"
+model as a bridge, rather than distilling directly across too large a gap. Sequence-level
+distillation doesn't share this failure mode as sharply: the student is only ever
+imitating *one* generated example at a time via ordinary cross-entropy
+([Chapter 18](18_instruction_tuning_and_sft.md)'s objective exactly), not trying to
+represent a teacher's full distribution shape — so a very large size gap costs quality
+gradually (a smaller student simply has less capacity to absorb what's demonstrated),
+not through this same sharp degradation mechanism.
+
 ## Grounded in This Repo's Code
 
 `custom-gpt-10m` and `custom-gpt-153m`'s entire training objective is one line —
@@ -129,10 +158,17 @@ would need a second argument (`teacher_logits`) and a KL-divergence term, illust
 import torch.nn.functional as F
 
 def distillation_loss(student_logits, teacher_logits, targets, vocab_size, alpha=0.5, T=2.0):
-    hard_loss = F.cross_entropy(student_logits.reshape(-1, vocab_size), targets.reshape(-1))
+    # Both logits are (B, T, V) - flatten to (B*T, V) BEFORE kl_div, not just before
+    # cross_entropy. reduction="batchmean" only divides by input.size(0); skipped on an
+    # unflattened 3D tensor, that's B alone, not B*T, silently inflating the loss by
+    # ~context_length (a real bug, not a hypothetical one - see custom-gpt-distill-10m's
+    # train_soft.py comment for the empirical numbers that caught it).
+    student_flat = student_logits.reshape(-1, vocab_size)
+    teacher_flat = teacher_logits.reshape(-1, vocab_size)
+    hard_loss = F.cross_entropy(student_flat, targets.reshape(-1))
     soft_loss = F.kl_div(
-        F.log_softmax(student_logits / T, dim=-1),
-        F.softmax(teacher_logits / T, dim=-1),
+        F.log_softmax(student_flat / T, dim=-1),
+        F.softmax(teacher_flat / T, dim=-1),
         reduction="batchmean",
     ) * (T ** 2)
     return alpha * hard_loss + (1 - alpha) * soft_loss
@@ -142,7 +178,9 @@ This would only be usable with a **teacher this repo has direct logit access to*
 running one of the `local_llms/` or `base_models/` checkpoints locally as the teacher and
 capturing its logits during data generation. It is not usable against a commercial API
 teacher (see [Chapter 33](33_distilling_production_models_into_a_local_model.md)), which
-is exactly why that chapter's practical recipe uses category 2, not this function.
+is exactly why that chapter's practical recipe uses category 2, not this function. A real,
+running implementation of exactly this function is
+[`custom-gpt-distill-10m/src/gpt/cli/train_soft.py`](../../from_scratch/custom-gpt-distill-10m/src/gpt/cli/train_soft.py).
 
 ## Deep-Dive: Why Distillation Actually Works
 
@@ -216,6 +254,11 @@ it means "as close as this student's capacity and this recipe's data allow."
    specifically would need to change in this project's code to support soft-label
    distillation instead of the sequence-level kind, and why couldn't that version be used
    against a hosted API teacher?
+4. A 1B-parameter model is proposed as a soft-label teacher for a 10M-parameter student
+   (a ~100x compression ratio). Using the named examples in this chapter's capacity-gap
+   table, explain why this ratio is a real risk factor rather than simply "more
+   compression, less quality," and name two ways to reduce that risk without abandoning
+   the pairing entirely.
 
 ## Key Terms
 
@@ -234,3 +277,8 @@ it means "as close as this student's capacity and this recipe's data allow."
 - **Feature-based / relation-based distillation**: matching internal activations or
   cross-example relationships rather than final outputs — requires white-box access to
   matched or bridgeable architectures.
+- **Capacity gap**: the student/teacher size mismatch that, past a certain point, makes
+  soft-label distillation quality actively *worse* rather than merely weaker, because the
+  student lacks the representational capacity to match the teacher's distribution shape —
+  named real distillations cluster around 1.5x-15x compression, well short of extreme
+  ratios like 100x.

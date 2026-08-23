@@ -43,6 +43,32 @@ trade FSDP makes is more network traffic in exchange for a peak per-device memor
 footprint that doesn't scale with the model's full size, which is what makes training
 models too large for any single device's memory possible at all.
 
+### Why "it doesn't fit" is a memory-accounting problem, concretely
+
+"Doesn't fit" is not about the weights alone. Mixed-precision AdamW training carries five
+separate copies of every parameter, not one:
+
+| What | Precision | Bytes/param |
+|---|---:|---:|
+| Weights (compute copy) | fp16/bf16 | 2 |
+| Gradients | fp16/bf16 | 2 |
+| Master weights | fp32 | 4 |
+| Adam momentum (m) | fp32 | 4 |
+| Adam variance (v) | fp32 | 4 |
+| **Total static memory** | | **16 bytes/param** |
+
+A 1B-parameter model needs **16GB** for this static state alone — before a single
+activation tensor exists. An NVIDIA L4 has 24GB total, leaving roughly 8GB for
+activations, which a real batch size/sequence length blows through fast. This is the
+concrete trigger for needing more than one GPU: not "training would be faster," but "the
+optimizer state alone doesn't fit."
+
+DDP doesn't help here (see above — every rank still needs its own full 16GB). FSDP shards
+that 16GB across `world_size` ranks: across 4 GPUs, each holds roughly 4GB of static
+state instead of 16GB, leaving roughly 20GB per GPU for activations instead of 8GB. This
+is the exact number that decides whether the model trains at all on this hardware, not a
+speed optimization.
+
 ### Where these fit in the broader parallelism landscape
 
 DDP and FSDP are both **data**-parallel strategies at their core (different ranks process
@@ -125,6 +151,9 @@ missing the sync even once would permanently desynchronize that replica from the
    solve this problem? Would FSDP? Explain the mechanism-level reason for each answer.
 3. Why does FSDP typically involve more network communication than DDP, and under what
    circumstances would you accept that cost anyway?
+4. A 1B-parameter model is trained with mixed-precision AdamW. Compute its static memory
+   footprint (weights + gradients + master weights + optimizer state) in GB, and determine
+   whether it fits on a single 24GB GPU before any activations are counted.
 
 ## Key Terms
 
@@ -139,3 +168,7 @@ missing the sync even once would permanently desynchronize that replica from the
 - **Tensor / pipeline parallelism**: model-parallel strategies splitting, respectively, a
   single large operation or entire layers across devices — distinct from FSDP's
   parameter-sharding approach, though real systems often combine several strategies.
+- **Static memory (training)**: the fixed per-parameter memory used by weights,
+  gradients, and optimizer state (16 bytes/param under mixed-precision AdamW) —
+  independent of batch size, as opposed to activation memory, which scales with batch
+  size and sequence length.
