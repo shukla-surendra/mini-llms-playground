@@ -11,7 +11,9 @@ import math
 import os
 import time
 
+import numpy as np
 import torch
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import trange
 
 from ..checkpoint import atomic_save, is_compatible, make_payload, remap_attn_impl
@@ -135,9 +137,24 @@ def estimate_loss(model, train_tokens, test_tokens, ctx_len, vocab_size, train_c
     return out
 
 
-def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
+def train(model_cfg, train_cfg, paths, label, resume=True, device=None,
+          rank=0, world_size=1, local_rank=0):
+    """`rank`/`world_size`/`local_rank` are DDP identity — defaults (0/1/0) reproduce
+    single-process training exactly, unchanged from before DDP support existed. When
+    `world_size > 1`, `device` must already be the caller's own `cuda:{local_rank}`
+    (see cli/train.py) — this function does not construct it.
+
+    Per-rank RNG seeding matters here specifically because `get_batch` (data/dataset.py)
+    draws from numpy's *global* legacy RNG, not a per-call generator — without an
+    explicit per-rank offset, every rank starts from whatever numpy's unseeded
+    OS-entropy default happens to be per process, which is uncontrolled, not merely
+    "the same everywhere" (the more familiar DDP footgun). Offsetting by `rank` makes
+    it both controlled AND different per rank, so ranks draw different random windows
+    instead of accidentally-random or accidentally-identical ones.
+    """
     device = device or get_device()
-    torch.manual_seed(train_cfg.seed)
+    torch.manual_seed(train_cfg.seed + rank)
+    np.random.seed(train_cfg.seed + rank)
 
     tokenizer = load_tokenizer(TOKENIZER_PATH)
     if tokenizer.n_vocab != model_cfg.vocab_size:
@@ -162,29 +179,90 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
         )
 
     attn_impl = os.getenv("ATTN_IMPL", "sdpa")
-    model = TinyGPT.from_config(model_cfg, context_length=ctx_len, attn_impl=attn_impl).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
-    )
+    # `raw_model` is always the plain, unwrapped TinyGPT — every checkpoint save and the
+    # end-of-run demo generation go through this reference specifically, never through
+    # `training_model`, so a saved checkpoint's `model_state_dict` keys never pick up
+    # DDP's `module.` prefix. `training_model` is what forward/backward actually call:
+    # the DDP wrapper when world_size > 1, or `raw_model` itself unwrapped otherwise —
+    # they are the same object in the world_size=1 case, so nothing below needs an
+    # `if world_size > 1` branch except the two places DDP actually changes behavior
+    # (construction, and no_sync() around non-boundary backward calls).
+    raw_model = TinyGPT.from_config(model_cfg, context_length=ctx_len, attn_impl=attn_impl).to(device)
+
+    if world_size > 1:
+        # DDP's actual mechanism: broadcast rank 0's initial weights to every other rank
+        # at construction time (every replica starts identical), then every backward()
+        # call all-reduces (averages) gradients across ranks before optimizer.step() —
+        # each rank ends up applying the same update, staying in sync without any
+        # further explicit parameter synchronization.
+        #
+        # device_ids is CUDA-only — DDP raises if you pass it for a CPU module (the
+        # local gloo/CPU smoke test hits this). None here means "infer from the
+        # module's own device," which is correct for both: on CPU there's nothing to
+        # pick between; on CUDA each rank's module already lives on its own
+        # cuda:{local_rank} (see cli/train.py's device construction), so DDP infers
+        # the right one from that alone.
+        device_ids = [local_rank] if device.type == "cuda" else None
+        training_model = DDP(raw_model, device_ids=device_ids)
+    else:
+        training_model = raw_model
+
+    # GPT_OPTIMIZER=adamw8bit: quantizes AdamW's momentum/variance state to int8
+    # (bitsandbytes), cutting that portion of the 16-bytes/param static memory total
+    # (see docs/llm-engineering/26_distributed_training_ddp_and_fsdp.md's static-memory
+    # table) roughly 4x. Opt-in, not default — bitsandbytes is an optional dependency
+    # (`uv sync --extra 8bit`), and its quantized-optimizer kernel is CUDA/CPU only:
+    # NOT implemented for MPS (verified directly — raises
+    # `bitsandbytes::optimizer_update_8bit_blockwise ... not currently implemented for
+    # the MPS device`; tracked upstream at pytorch/pytorch#141287). Fail loud here
+    # rather than silently falling back to plain AdamW on MPS, same "don't silently
+    # downgrade" convention as ATTN_IMPL/GPT_COMPILE elsewhere in this file.
+    optimizer_choice = os.getenv("GPT_OPTIMIZER", "adamw")
+    if optimizer_choice == "adamw8bit":
+        if str(device) == "mps":
+            raise RuntimeError(
+                "GPT_OPTIMIZER=adamw8bit requires bitsandbytes' quantized-optimizer "
+                "kernel, which has no MPS implementation (pytorch/pytorch#141287). "
+                "Use device=cpu (for a mechanism check) or a CUDA GPU, or unset "
+                "GPT_OPTIMIZER to train with plain AdamW on MPS."
+            )
+        import bitsandbytes as bnb
+        optimizer = bnb.optim.AdamW8bit(
+            training_model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
+        )
+    elif optimizer_choice == "adamw":
+        optimizer = torch.optim.AdamW(
+            training_model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay
+        )
+    else:
+        raise ValueError(f"Unknown GPT_OPTIMIZER {optimizer_choice!r}. Use 'adamw' or 'adamw8bit'.")
 
     amp_device_type, amp_dtype = resolve_amp(train_cfg.precision, device)
 
-    tokens_per_step = train_cfg.batch_size * ctx_len
-    print(f"Model: {label}  |  {model.param_count():,} parameters  |  device={device}  |  attn_impl={attn_impl}")
-    print(f"Train tokens: {len(train_tokens):,}  Test tokens: {len(test_tokens):,}")
-    print(
-        f"Precision: {amp_dtype if amp_dtype else 'fp32'}  |  "
-        f"batch {train_cfg.batch_size} x accum {train_cfg.grad_accum_steps} = "
-        f"{train_cfg.batch_size * train_cfg.grad_accum_steps} seqs/update"
-    )
-    # The token budget is implied by steps*batch_size*ctx_len, so print it rather than
-    # let a changed batch_size silently rescale the run (see TrainConfig's docstring).
-    budget = train_cfg.steps * tokens_per_step
-    print(
-        f"Budget: {train_cfg.steps:,} steps x {tokens_per_step:,} tok = {budget / 1e9:.2f}B tokens "
-        f"({budget / model.param_count():.1f} tok/param, {budget / len(train_tokens):.2f} epochs)"
-    )
-    print(f"Checkpoints: {paths.checkpoint_dir}/")
+    is_main = rank == 0
+    if is_main:
+        print(f"Model: {label}  |  {raw_model.param_count():,} parameters  |  device={device}  |  "
+              f"attn_impl={attn_impl}  |  world_size={world_size}")
+        print(f"Train tokens: {len(train_tokens):,}  Test tokens: {len(test_tokens):,}")
+        budget = train_cfg.steps * train_cfg.batch_size * ctx_len * world_size
+        print(
+            f"Precision: {amp_dtype if amp_dtype else 'fp32'}  |  "
+            f"batch {train_cfg.batch_size} x accum {train_cfg.grad_accum_steps} x "
+            f"world_size {world_size} = "
+            f"{train_cfg.batch_size * train_cfg.grad_accum_steps * world_size} seqs/update"
+        )
+        # The token budget is implied by steps*batch_size*ctx_len*world_size — printed
+        # explicitly (not silently rescaled) because `TrainConfig.steps` is NOT
+        # world-size-aware here: running the same `steps` under a bigger world_size
+        # consumes proportionally more total tokens, since every rank processes its
+        # own full batch in parallel. See cli/train.py's module docstring.
+        print(
+            f"Budget: {train_cfg.steps:,} steps x {train_cfg.batch_size * ctx_len * world_size:,} tok "
+            f"(world_size {world_size}) = "
+            f"{budget / 1e9:.2f}B tokens ({budget / raw_model.param_count():.1f} tok/param, "
+            f"{budget / len(train_tokens):.2f} epochs)"
+        )
+        print(f"Checkpoints: {paths.checkpoint_dir}/")
 
 
     state = {
@@ -195,7 +273,13 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
     }
 
     if resume and paths.latest_checkpoint.exists():
-        _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device)
+        # Every rank loads the same checkpoint file independently from shared local
+        # disk (single-node multi-GPU) — no coordination needed. This runs after DDP
+        # construction's rank-0-broadcast above, so it simply overwrites that broadcast
+        # (fresh-init) state with the real resumed weights on every rank identically;
+        # a little redundant work, not a correctness issue.
+        _resume_into(state, raw_model, optimizer, paths, model_cfg, ctx_len, device,
+                     is_main=is_main)
 
     # ETA from this run's own history. Only meaningful after a resume, where
     # `start_step` steps have demonstrably taken `total_training_seconds` — at step 0
@@ -204,7 +288,7 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
     # finishes later in wall-clock terms than this says.
     done_steps = state["start_step"]
     done_hours = state["total_training_seconds"] / 3600.0
-    if done_steps > 0 and done_hours > 0:
+    if is_main and done_steps > 0 and done_hours > 0:
         rate = done_steps / done_hours
         eta = format_eta(train_cfg.steps - done_steps, rate)
         if eta:
@@ -220,7 +304,8 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
             )
 
     return _run_loop(
-        model=model,
+        raw_model=raw_model,
+        training_model=training_model,
         optimizer=optimizer,
         tokenizer=tokenizer,
         train_tokens=train_tokens,
@@ -232,46 +317,59 @@ def train(model_cfg, train_cfg, paths, label, resume=True, device=None):
         label=label,
         device=device,
         state=state,
+        rank=rank,
+        world_size=world_size,
         amp_device_type=amp_device_type,
         amp_dtype=amp_dtype,
     )
 
 
-def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device):
-    """Restore weights/optimizer/progress from the latest checkpoint, if compatible."""
+def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device, is_main=True):
+    """Restore weights/optimizer/progress from the latest checkpoint, if compatible.
+
+    `model` here must always be the unwrapped raw module, never a DDP wrapper — see
+    `train()`'s `raw_model`/`training_model` split. Every rank calls this
+    independently (see call site's comment) against the same shared-disk checkpoint,
+    so `is_main` only gates printing, not the load itself.
+    """
     checkpoint = None
     for candidate in (paths.latest_checkpoint, paths.best_checkpoint):
         if not candidate.exists():
             continue
         try:
-            print(f"Resuming from {candidate}...")
+            if is_main:
+                print(f"Resuming from {candidate}...")
             checkpoint = torch.load(candidate, map_location=device)
             break
         except (RuntimeError, EOFError) as exc:
-            print(f"Warning: could not read {candidate}: {exc}")
+            if is_main:
+                print(f"Warning: could not read {candidate}: {exc}")
 
     if checkpoint is None:
-        print("No readable checkpoint found — starting a fresh run.")
+        if is_main:
+            print("No readable checkpoint found — starting a fresh run.")
         return
 
     if not is_compatible(checkpoint, model_cfg, ctx_len):
-        print(
-            "Warning: checkpoint architecture does not match the current config "
-            f"(checkpoint embed={checkpoint.get('embed_size')} "
-            f"layers={checkpoint.get('num_layers')} ctx={checkpoint.get('context_length')} "
-            f"vs current embed={model_cfg.embed_size} layers={model_cfg.num_layers} "
-            f"ctx={ctx_len}). Starting a fresh run."
-        )
+        if is_main:
+            print(
+                "Warning: checkpoint architecture does not match the current config "
+                f"(checkpoint embed={checkpoint.get('embed_size')} "
+                f"layers={checkpoint.get('num_layers')} ctx={checkpoint.get('context_length')} "
+                f"vs current embed={model_cfg.embed_size} layers={model_cfg.num_layers} "
+                f"ctx={ctx_len}). Starting a fresh run."
+            )
         return
 
     checkpoint_attn_impl = checkpoint.get("attn_impl", "naive")
     model_state_dict = checkpoint["model_state_dict"]
     if checkpoint_attn_impl != model.attn_impl:
-        print(
-            f"Checkpoint was trained with attn_impl={checkpoint_attn_impl!r}, current "
-            f"run uses attn_impl={model.attn_impl!r} — remapping attention weights "
-            f"(same values, different parameter names; see checkpoint.remap_attn_impl)."
-        )
+        if is_main:
+            print(
+                f"Checkpoint was trained with attn_impl={checkpoint_attn_impl!r}, current "
+                f"run uses attn_impl={model.attn_impl!r} — remapping attention weights "
+                f"(same values, different parameter names; see checkpoint.remap_attn_impl)."
+            )
         model_state_dict = remap_attn_impl(
             model_state_dict, num_layers=model_cfg.num_layers,
             from_impl=checkpoint_attn_impl, to_impl=model.attn_impl,
@@ -283,13 +381,31 @@ def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device):
     state["best_test_loss"] = float(checkpoint.get("best_test_loss", float("inf")))
     state["processed_tokens"] = int(checkpoint.get("processed_tokens", 0))
     state["total_training_seconds"] = float(checkpoint.get("total_training_seconds", 0.0))
-    print(f"Resumed at step {state['start_step']} "
-          f"(cumulative {format_duration(state['total_training_seconds'])})")
+    if is_main:
+        print(f"Resumed at step {state['start_step']} "
+              f"(cumulative {format_duration(state['total_training_seconds'])})")
 
 
-def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
-              model_cfg, train_cfg, paths, label, device, state,
-              amp_device_type=None, amp_dtype=None):
+def _run_loop(raw_model, training_model, optimizer, tokenizer, train_tokens, test_tokens,
+              ctx_len, model_cfg, train_cfg, paths, label, device, state,
+              rank=0, world_size=1, amp_device_type=None, amp_dtype=None):
+    """`raw_model` (unwrapped TinyGPT) is used for every checkpoint save/load and the
+    demo generation at the end — never `training_model` — so a saved checkpoint's
+    `model_state_dict` never picks up DDP's `module.` prefix, keeping it loadable by
+    the plain (non-DDP) inference code unchanged. `training_model` (== `raw_model`
+    itself when world_size == 1) is used for the actual forward/backward calls, since
+    that's the object DDP's gradient-sync hooks are registered on.
+
+    Only rank 0 ("is_main") prints, shows the progress bar, runs eval, and writes
+    checkpoints/eval-history — every rank running these redundantly would race to
+    write the same files and spam duplicate output. The one thing every rank *does*
+    do independently is the stop-file check (see below) and the training step itself
+    (forward/backward/optimizer.step()) — DDP's gradient all-reduce is a collective
+    operation and needs every rank present at every synced backward call, so nothing
+    that could make ranks diverge in *which* step they're on is allowed to be
+    rank-gated.
+    """
+    is_main = rank == 0
     run_start = time.time()
 
     def elapsed():
@@ -306,7 +422,7 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
 
     def payload(step, total_training_seconds=None):
         return make_payload(
-            model=model,
+            model=raw_model,
             optimizer=optimizer,
             model_cfg=model_cfg,
             train_cfg=train_cfg,
@@ -325,7 +441,7 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
         )
 
     start_step = state["start_step"]
-    progress = trange(train_cfg.steps, desc="training", unit="step", initial=start_step)
+    progress = trange(train_cfg.steps, desc="training", unit="step", initial=start_step) if is_main else None
     optimizer.zero_grad(set_to_none=True)
     last_step = start_step - 1
     interrupted = False
@@ -334,17 +450,26 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
     try:
         for step in range(start_step, train_cfg.steps):
             if paths.stop_file.exists():
-                # Fallback for when SIGINT doesn't get through (see Paths.stop_file's
-                # docstring) — checked every step, so honored within one step's time
-                # rather than hanging indefinitely like an unreceived signal would.
+                # Every rank checks (and unlinks) this independently, not just rank 0:
+                # single-node multi-GPU means all ranks share the same local disk, so
+                # the check is naturally consistent without coordination, and
+                # `unlink(missing_ok=True)` makes the redundant deletes across ranks
+                # harmless. This *cannot* be rank-0-only — if only rank 0 broke out of
+                # the loop, other ranks would still call backward() on the next step
+                # and hang forever waiting for rank 0's all-reduce participation that
+                # never comes (see the module-level docstring above).
                 paths.stop_file.unlink(missing_ok=True)
-                print(f"\n{paths.stop_file} found — stopping gracefully...")
+                if is_main:
+                    print(f"\n{paths.stop_file} found — stopping gracefully...")
                 interrupted = True
                 break
 
-            if step % train_cfg.eval_interval == 0 or step == train_cfg.steps - 1:
+            if is_main and (step % train_cfg.eval_interval == 0 or step == train_cfg.steps - 1):
+                # Eval is rank-0-only: it's a plain forward pass (no collective op
+                # needed), so other ranks safely skip straight to their own training
+                # step below rather than waiting — no desync risk.
                 losses = estimate_loss(
-                    model, train_tokens, test_tokens, ctx_len,
+                    training_model, train_tokens, test_tokens, ctx_len,
                     model_cfg.vocab_size, train_cfg, device,
                     amp=(amp_device_type, amp_dtype),
                 )
@@ -378,47 +503,80 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
             with torch.autocast(device_type=amp_device_type,
                                 dtype=amp_dtype or torch.float32,
                                 enabled=amp_dtype is not None):
-                loss = next_token_loss(model(xb), yb, model_cfg.vocab_size)
-            # No GradScaler: bf16 keeps fp32's exponent range, so gradients cannot
-            # underflow the way fp16's would. Weights/grads stay fp32 regardless —
-            # autocast only changes the dtype of the ops inside the block.
-            (loss / train_cfg.grad_accum_steps).backward()
+                loss = next_token_loss(training_model(xb), yb, model_cfg.vocab_size)
 
+            # Computed BEFORE backward (unlike the pre-DDP version) because DDP's
+            # no_sync() decision below needs to know, going in, whether this backward
+            # call is the accumulation boundary — the all-reduce should fire on
+            # exactly the boundary step's backward, not every micro-step's.
             is_accum_boundary = (step - start_step + 1) % train_cfg.grad_accum_steps == 0
-            if is_accum_boundary or step == train_cfg.steps - 1:
+            sync_now = is_accum_boundary or step == train_cfg.steps - 1
+
+            # No GradScaler: bf16 keeps fp32's exponent range, so gradients cannot
+            # underflow the way fp16's would. Weights/grads stay fp32 regardless.
+            if world_size > 1 and not sync_now:
+                # Non-boundary micro-step: accumulate gradients locally on this rank
+                # only, skip the (expensive, and semantically premature) all-reduce
+                # DDP would otherwise trigger on every single backward() call.
+                with training_model.no_sync():
+                    (loss / train_cfg.grad_accum_steps).backward()
+            else:
+                # Boundary step (or single-process, where no_sync() doesn't apply):
+                # let DDP's hook fire normally — this is the one backward call per
+                # accumulation window that actually averages gradients across ranks.
+                (loss / train_cfg.grad_accum_steps).backward()
+
+            if sync_now:
                 for group in optimizer.param_groups:
                     group["lr"] = lr_for_step(step, train_cfg)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip_norm)
+                torch.nn.utils.clip_grad_norm_(raw_model.parameters(), train_cfg.grad_clip_norm)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
-            postfix = {
-                "batch_loss": f"{loss.item():.4f}",
-                "est_epoch": f"{state['processed_tokens'] / len(train_tokens):.3f}",
-                "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
-                "total_h": f"{elapsed() / 3600.0:.2f}",
-                "eta_h": (f"{(train_cfg.steps - step) / max(step / max(elapsed() / 3600.0, 1e-9), 1e-9):.1f}"
-                          if step > 0 and elapsed() > 0 else "?"),
-            }
-            if latest_metrics:
-                postfix.update(latest_metrics)
-            progress.set_postfix(**postfix)
-            progress.update(1)
+            if is_main:
+                postfix = {
+                    "batch_loss": f"{loss.item():.4f}",
+                    "est_epoch": f"{state['processed_tokens'] / len(train_tokens):.3f}",
+                    "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
+                    "total_h": f"{elapsed() / 3600.0:.2f}",
+                    "eta_h": (f"{(train_cfg.steps - step) / max(step / max(elapsed() / 3600.0, 1e-9), 1e-9):.1f}"
+                              if step > 0 and elapsed() > 0 else "?"),
+                }
+                if latest_metrics:
+                    postfix.update(latest_metrics)
+                progress.set_postfix(**postfix)
+                progress.update(1)
 
-            state["processed_tokens"] += train_cfg.batch_size * ctx_len
+            # Global tokens processed this step, across all ranks — each rank
+            # independently processes batch_size*ctx_len tokens, world_size of them
+            # in parallel, so the *global* count (what est_epoch/Budget mean by
+            # "tokens") scales by world_size even though train_cfg.steps doesn't
+            # change. See train()'s Budget print for the same reasoning.
+            state["processed_tokens"] += train_cfg.batch_size * ctx_len * world_size
             last_step = step
 
-            if (step + 1) % train_cfg.save_every_steps == 0:
+            if is_main and (step + 1) % train_cfg.save_every_steps == 0:
                 atomic_save(payload(step), paths.latest_checkpoint)
     except KeyboardInterrupt:
         interrupted = True
-        print("\nInterrupted — saving a resumable checkpoint...")
+        if is_main:
+            print("\nInterrupted — saving a resumable checkpoint...")
     finally:
-        progress.close()
+        if progress is not None:
+            progress.close()
 
     final_total_seconds = elapsed()  # single source of truth from here on — see note above
     state["total_training_seconds"] = final_total_seconds
     final_step = max(last_step, start_step - 1)
+
+    if not is_main:
+        # Non-main ranks never ran eval, so their local state["best_test_loss"] was
+        # never updated off its float("inf") initial value — only rank 0's return
+        # value/checkpoints are authoritative; callers should not inspect a non-main
+        # rank's returned dict for anything but step/interrupted.
+        return {"interrupted": interrupted, "step": final_step,
+                "best_test_loss": state["best_test_loss"]}
+
     atomic_save(payload(final_step, total_training_seconds=final_total_seconds), paths.latest_checkpoint)
 
     if interrupted:
@@ -440,7 +598,7 @@ def _run_loop(model, optimizer, tokenizer, train_tokens, test_tokens, ctx_len,
     print(f"Cumulative training time: {format_duration(state['total_training_seconds'])}")
 
     _, completion = generate_text(
-        model=model,
+        model=raw_model,
         tokenizer=tokenizer,
         prompt=train_cfg.demo_prompt,
         context_length=ctx_len,

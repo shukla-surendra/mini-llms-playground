@@ -16,6 +16,11 @@ dependencies = [
     "huggingface_hub>=0.23",
 ]
 
+[project.optional-dependencies]
+# GPT_OPTIMIZER=adamw8bit (trainer.py) — CUDA/CPU only, no MPS kernel. Kept out of the
+# base install so a plain MPS/CPU checkout doesn't pull a package it can't use on GPU.
+8bit = ["bitsandbytes>=0.43"]
+
 [project.scripts]
 gpt-config = "gpt.cli.show_config:main"
 gpt-data = "gpt.cli.prepare_data:main"
