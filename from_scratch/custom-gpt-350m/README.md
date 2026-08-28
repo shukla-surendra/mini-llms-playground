@@ -380,6 +380,44 @@ is detected and refused rather than silently corrupting a run.
 Saves are atomic (write to `.tmp`, then rename), so interrupting training cannot leave a
 truncated checkpoint behind.
 
+## vLLM serving without changing training or resume
+
+`make export-vllm` converts one native checkpoint into a separate Hugging Face
+**`LlamaForCausalLM`** directory that vLLM can serve — not `GPT2LMHeadModel`, since this
+project's architecture (RoPE, RMSNorm, SwiGLU, no biases — see `model.py`'s module
+docstring) is Llama-shaped, not GPT-2-shaped, unlike the sibling `custom-gpt-{10m,50m,153m}`
+projects. The conversion maps every weight exactly: RoPE's rotation convention matches
+HF's `rotate_half` bit-for-bit, SwiGLU's `silu` is Llama's own default activation (no
+approximation gap to work around), and the fused Q/K/V projection is split into Llama's
+three separate matrices. The tokenizer needs no conversion either — `tokenizer/tokenizer.json`
+is already a native `tokenizers`-library file, which `PreTrainedTokenizerFast` loads
+directly. A native-versus-exported logit-parity check (`torch.allclose`) runs before
+anything is written, so a mismatched export fails loudly instead of shipping silently-wrong
+weights.
+
+```bash
+make export-vllm
+# Prints a directory such as exports/vllm/350m/best-step-<N>
+
+make serve-vllm VLLM_MODEL_DIR=exports/vllm/350m/best-step-<N>
+```
+
+The export command installs only portable Hugging Face dependencies and reads only a
+checkpoint. It never modifies `checkpoints/<label>/`, including `latest.pt` and its
+optimizer state, so normal `make train` resume behavior is unchanged. Export directories
+are immutable and include the source step, allowing an exported snapshot to coexist with
+a later resumed training run. Use `gpt-export-vllm --checkpoint latest` when you
+explicitly want a snapshot of the latest resumable state.
+
+### Testing vLLM on an Apple-Silicon Mac
+
+The exported model can be served on a Mac through vLLM's **experimental CPU backend** —
+see the sibling `custom-gpt-50m/README.md`'s "Testing vLLM on an Apple-Silicon Mac"
+section for the from-source install steps (`vllm` has no macOS wheel on PyPI; this
+project's `.venv` needs its own source build, same as that one). This is a compatibility
+test, not a performance path: it does not use MPS or the Apple GPU. For GPU inference on
+this Mac, use the existing MPS server (`make serve`) instead.
+
 ## Monitoring a long run
 
 - `logs/train_eval_history_<label>.csv` — train/test loss, perplexity, tokens, wall-clock,

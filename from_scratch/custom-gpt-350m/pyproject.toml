@@ -20,6 +20,18 @@ dependencies = [
 # GPT_OPTIMIZER=adamw8bit (trainer.py) — CUDA/CPU only, no MPS kernel. Kept out of the
 # base install so a plain MPS/CPU checkout doesn't pull a package it can't use on GPU.
 8bit = ["bitsandbytes>=0.43"]
+# The export is portable: it only needs Hugging Face serialization dependencies.
+# vLLM itself is constrained to Linux here because its PyPI package resolves CUDA
+# dependencies that do not exist for macOS/Apple Silicon.
+hf-export = [
+    "transformers>=4.46,<6",
+    "safetensors>=0.4",
+]
+vllm = [
+    "transformers>=4.46,<6",
+    "safetensors>=0.4",
+    "vllm>=0.11; sys_platform == 'linux'",
+]
 
 [project.scripts]
 gpt-config = "gpt.cli.show_config:main"
@@ -33,6 +45,7 @@ gpt-infer = "gpt.cli.infer:main"
 gpt-serve = "gpt.cli.serve:main"
 gpt-eval = "gpt.cli.evaluate:main"
 gpt-qa-report = "gpt.cli.qa_report:main"
+gpt-export-vllm = "gpt.cli.export_vllm:main"
 
 [build-system]
 requires = ["hatchling"]

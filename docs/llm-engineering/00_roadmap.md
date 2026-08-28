@@ -167,7 +167,7 @@ generalizes to production-scale serving.
 |---|---|---|
 | 21 | [Inference Mechanics: Decoding, Sampling, and KV Cache](21_inference_mechanics_decoding_sampling_and_kv_cache.md) | **written** |
 | 22 | [From Script to API: Serving a Model for Real](22_from_script_to_api_serving_a_model_for_real.md) | **written** |
-| 23 | The Serving-Engine Ecosystem (vLLM and Friends) | planned |
+| 23 | [The Serving-Engine Ecosystem (vLLM and Friends)](23_the_serving_engine_ecosystem_vllm_and_friends.md) | **written** |
 | 31 | [Publishing a Model: The Hugging Face Hub Workflow](31_publishing_a_model_the_hugging_face_hub_workflow.md) | **written** |
 
 Chapter 31 is numbered out of sequence for the same reason Part 2B's chapters are — appended
@@ -214,9 +214,9 @@ chapter numbers — appended after the original catalog to avoid renumbering, bu
 right after fine-tuning in reading order. Chapter 33 covers the terms-of-service question
 before the pipeline itself — read that section even if you skip the rest.
 
-**If your question is "how do I actually serve this to users"**: Part 4 (21 → 22, then 31
-for publishing the trained checkpoint itself), and for anything beyond a single local
-machine, continue into `platform-lab/fundamentals/gpu_infrastructure/`'s Phase 5 (LLM
+**If your question is "how do I actually serve this to users"**: Part 4 (21 → 22 → 23,
+then 31 for publishing the trained checkpoint itself), and for anything beyond a single
+local machine, continue into `platform-lab/fundamentals/gpu_infrastructure/`'s Phase 5 (LLM
 Serving) chapters, which this curriculum's Part 4 hands off to explicitly.
 
 **If you're resuming, continuing, or repeating training runs**: 27 (checkpointing

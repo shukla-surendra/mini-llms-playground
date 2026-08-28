@@ -195,7 +195,15 @@ export-vllm:
 # `make export-vllm` prints the immutable directory to pass as VLLM_MODEL_DIR.
 # On Linux this installs the declared vLLM extra. On macOS, install vLLM's
 # experimental CPU build from source into this project's .venv first (README).
-# Extra flags such as --port 8001 can be supplied through VLLM_ARGS.
+# Extra flags such as --port 8001 or --gpu-memory-utilization 0.2 (the CPU backend
+# repurposes that flag to mean "fraction of system RAM," not VRAM) can be supplied
+# through VLLM_ARGS. Deliberately NOT passing --model-impl transformers here: that
+# forces vLLM's generic HF-bridge model loader instead of its own native GPT-2
+# implementation, and on a from-source CPU build that generic path failed to load
+# this architecture's biased Conv1D attention projection ("weights were not
+# initialized from checkpoint: ...attn.c_attn.bias") even though the export itself
+# is correct (verified independently via plain transformers.AutoModelForCausalLM).
+# vLLM's native GPT-2/Llama support loads this project's exports without issue.
 serve-vllm:
 	@if [ "$$(uname -s)" = "Linux" ]; then uv sync --extra vllm; fi
 	@test -n "$(VLLM_MODEL_DIR)" || (echo "Set VLLM_MODEL_DIR to an export directory." >&2; exit 2)
@@ -204,7 +212,7 @@ serve-vllm:
 		echo "macOS: follow README's vLLM CPU-from-source setup, then retry." >&2; \
 		exit 2; \
 	fi
-	"$(CURDIR)/.venv/bin/vllm" serve "$(VLLM_MODEL_DIR)" --model-impl transformers $(VLLM_ARGS)
+	"$(CURDIR)/.venv/bin/vllm" serve "$(VLLM_MODEL_DIR)" $(VLLM_ARGS)
 
 eval: setup
 	uv run gpt-eval

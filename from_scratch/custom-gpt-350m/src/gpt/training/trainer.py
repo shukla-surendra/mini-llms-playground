@@ -16,7 +16,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import trange
 
-from ..checkpoint import atomic_save, is_compatible, make_payload, remap_attn_impl
+from ..checkpoint import atomic_save, is_compatible, make_payload
 from ..config import TOKENIZER_NAME, TOKENIZER_PATH
 from ..data import (
     effective_context_length,
@@ -361,20 +361,12 @@ def _resume_into(state, model, optimizer, paths, model_cfg, ctx_len, device, is_
             )
         return
 
-    checkpoint_attn_impl = checkpoint.get("attn_impl", "naive")
-    model_state_dict = checkpoint["model_state_dict"]
-    if checkpoint_attn_impl != model.attn_impl:
-        if is_main:
-            print(
-                f"Checkpoint was trained with attn_impl={checkpoint_attn_impl!r}, current "
-                f"run uses attn_impl={model.attn_impl!r} — remapping attention weights "
-                f"(same values, different parameter names; see checkpoint.remap_attn_impl)."
-            )
-        model_state_dict = remap_attn_impl(
-            model_state_dict, num_layers=model_cfg.num_layers,
-            from_impl=checkpoint_attn_impl, to_impl=model.attn_impl,
-        )
-    model.load_state_dict(model_state_dict)
+    # No attn_impl remap here — unlike the sibling GPT-2-style projects, this model has
+    # no attn_impl switch (SDPA is the only path; see model.py), so there is nothing to
+    # remap between. `checkpoint["attn_impl"]` is a vestigial field from before the RoPE
+    # rewrite (still written by checkpoint.make_payload's getattr(..., "naive") default);
+    # this used to read the now-nonexistent `model.attn_impl` and crashed every resume.
+    model.load_state_dict(checkpoint["model_state_dict"])
     if "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     state["start_step"] = int(checkpoint.get("step", -1)) + 1

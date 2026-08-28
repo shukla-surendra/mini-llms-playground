@@ -59,7 +59,7 @@ memory — including the KV cache from
 [Chapter 21](21_inference_mechanics_decoding_sampling_and_kv_cache.md) — becomes the
 binding constraint rather than request scheduling. Both are real, well-studied problems
 with dedicated serving engines (vLLM and similar) built specifically to solve them — see
-[Chapter 23](00_roadmap.md) (planned) and this curriculum's explicit hand-off to
+[Chapter 23](23_the_serving_engine_ecosystem_vllm_and_friends.md) and this curriculum's explicit hand-off to
 `platform-lab/fundamentals/gpu_infrastructure/`'s Phase 5 (LLM Serving) chapters for that
 depth. Reaching for that machinery before request volume or model size actually demand it
 is solving a problem you don't have yet.
