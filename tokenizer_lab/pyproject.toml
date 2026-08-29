@@ -1,0 +1,18 @@
+[project]
+name = "tokenizer-lab"
+version = "0.1.0"
+description = "Hands-on tokenization exploration — docs + notebooks, grounded in this repo's own real tokenizers (custom-gpt-6m/50m/350m)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "jupyter>=1.0",
+    "ipykernel>=6.29",
+    "tokenizers>=0.20",
+    "tiktoken>=0.7",
+    "matplotlib>=3.8",
+    "transformers>=4.46,<6",
+]
+
+[tool.uv]
+# This is a notebook/docs workspace, not an installable library — nothing to build.
+package = false
