@@ -55,7 +55,7 @@ pwd
 Example:
 
 ```text
-/Users/surendrashukla/projects/2026/mini-llms-playground
+~/projects/2026/mini-llms-playground
 ```
 
 Useful when a command depends on your current working directory.
@@ -1012,7 +1012,7 @@ For your 153M model, a clean workflow is:
 ## Step 1 — Check the project
 
 ```bash
-cd /Users/surendrashukla/projects/2026/mini-llms-playground
+cd ~/projects/2026/mini-llms-playground
 ```
 
 ## Step 2 — Inspect configuration
