@@ -34,17 +34,12 @@ BYTES_PER_TOKEN = 2  # TOKEN_DTYPE is uint16
 COPY_CHUNK = 4 * 1024 * 1024
 
 SOURCES = [
-    # Ordered smallest-raw-size-first among what's left to do (books/cosmopedia are
-    # already in manifest.json and skipped via the resume logic below regardless of
-    # position) — so a killed/paused run banks progress on more sources sooner,
-    # rather than sinking the whole remaining budget into the single 15GB source
-    # first and having nothing else to show if it's interrupted partway through.
     ("books", SHARED_RAW / "books/dataset.txt"),
     ("cosmopedia", SHARED_RAW / "HuggingFaceTB__cosmopedia/text.txt"),
-    ("wikipedia_hi", SHARED_RAW / "wikimedia__wikipedia__hi/text.txt"),
-    ("open_web_math", SHARED_RAW / "open-web-math__open-web-math/text.txt"),
-    ("finemath_4plus", SHARED_RAW / "HuggingFaceTB__finemath__finemath-4plus/text.txt"),
     ("cosmopedia_v2", SHARED_RAW / "HuggingFaceTB__smollm-corpus__cosmopedia-v2/text.txt"),
+    ("finemath_4plus", SHARED_RAW / "HuggingFaceTB__finemath__finemath-4plus/text.txt"),
+    ("open_web_math", SHARED_RAW / "open-web-math__open-web-math/text.txt"),
+    ("wikipedia_hi", SHARED_RAW / "wikimedia__wikipedia__hi/text.txt"),
 ]
 
 

@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+#
+# cloud-init user-data. Runs as root, once, on first boot, IDENTICALLY on both
+# nodes except for the ${node_rank}/${is_master} values baked in at render time
+# (see main.tf's user_data_master/user_data_worker).
+#
+# Log: /var/log/gpu-node-bootstrap.log  (tail it while either box comes up)
+#
+# Deliberately NOT fatal on failure of the optional steps: a failed corpus sync
+# should leave you with a reachable box to debug, not a box that never finishes
+# booting while the meter runs — on BOTH nodes, since one half of a DDP pair
+# stuck mid-boot is just as useless as both halves being stuck.
+
+set -uo pipefail
+exec > >(tee -a /var/log/gpu-node-bootstrap.log) 2>&1
+echo "=== bootstrap start $(date -Is) — node_rank=${node_rank} (master=${is_master}) ==="
+
+USER_NAME=ubuntu
+USER_HOME=/home/ubuntu
+REPO_DIR="$USER_HOME/${repo_dir_name}"
+WORK_DIR="$REPO_DIR/${project_subdir}"
+
+# ---------------------------------------------------------------- packages
+export DEBIAN_FRONTEND=noninteractive
+for i in $(seq 1 30); do
+  if apt-get update -y; then break; fi
+  echo "apt lock busy, retry $i"; sleep 10
+done
+apt-get install -y tmux jq git unzip netcat-openbsd >/dev/null || echo "WARN: apt install failed"
+
+if ! command -v aws >/dev/null 2>&1; then
+  echo "installing awscli v2"
+  curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install >/dev/null
+fi
+
+aws configure set default.region "${region}" || true
+
+# ---------------------------------------------------------------- GPU sanity
+# Printed into the bootstrap log so a wrong instance type is visible before you
+# start a multi-hour run. bf16 == False means Turing (T4) — wrong box.
+nvidia-smi || echo "WARN: nvidia-smi failed — is this a GPU instance with the DL Base AMI?"
+
+# ---------------------------------------------------------------- repo + deps
+sudo -u "$USER_NAME" -H bash <<'USERSETUP'
+set -uo pipefail
+cd "$HOME"
+
+if ! command -v uv >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/uv" ]; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.local/bin:$PATH"
+USERSETUP
+
+sudo -u "$USER_NAME" -H bash -c "
+set -uo pipefail
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+cd \"$USER_HOME\"
+if [ ! -d \"$REPO_DIR/.git\" ]; then
+  git clone --depth 50 '${repo_url}' '$REPO_DIR' || echo 'WARN: clone failed (private repo? use a deploy key)'
+fi
+if [ -d \"$WORK_DIR\" ]; then
+  cd \"$WORK_DIR\" && uv sync || echo 'WARN: uv sync failed'
+  mkdir -p data checkpoints logs tokenizer
+else
+  echo \"WARN: project_subdir not found: $WORK_DIR\"
+fi
+"
+
+# ---------------------------------------------------------------- corpus
+# Ship the token files, never train.txt: re-tokenizing on two hourly-billed GPUs is
+# money for nothing, twice over.
+%{ if corpus_prefix != "" ~}
+sudo -u "$USER_NAME" -H bash -c "
+aws s3 sync 's3://${bucket}/${corpus_prefix}' '$WORK_DIR/data/' --only-show-errors \
+  && ls -la '$WORK_DIR/data/' \
+  || echo 'WARN: corpus sync failed'
+"
+%{ else ~}
+echo "corpus_prefix empty — skipping corpus sync (pull it by hand once you are on the box)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- tokenizer
+# This project's embedding table is sized to its own 32,768-token vocabulary — a
+# corpus .bin without the exact matching tokenizer.json trains on ids that index
+# the wrong embedding rows, silently, not with an error. Both nodes need the
+# identical file, not just node 0.
+%{ if tokenizer_prefix != "" ~}
+sudo -u "$USER_NAME" -H bash -c "
+aws s3 sync 's3://${bucket}/${tokenizer_prefix}' '$WORK_DIR/tokenizer/' --only-show-errors \
+  && ls -la '$WORK_DIR/tokenizer/' \
+  || echo 'WARN: tokenizer sync failed'
+"
+%{ else ~}
+echo "tokenizer_prefix empty — skipping tokenizer sync (pull it by hand once you are on the box)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- checkpoint (resume)
+# `gpt-train` auto-resumes from checkpoints/<label>/latest.pt if it exists — no flag,
+# no code change. Both nodes pull the same prefix so either can serve as rank 0 on a
+# future re-launch even if roles get reassigned, though only rank 0 actually writes
+# checkpoints during a normal run (see trainer.py's is_main gating).
+%{ if checkpoint_prefix != "" ~}
+sudo -u "$USER_NAME" -H bash -c "
+mkdir -p '$WORK_DIR/checkpoints'
+aws s3 sync 's3://${bucket}/${checkpoint_prefix}' '$WORK_DIR/checkpoints/' --only-show-errors \
+  && find '$WORK_DIR/checkpoints' -name '*.pt' -exec ls -la {} \; \
+  || echo 'WARN: checkpoint sync failed'
+"
+%{ else ~}
+echo "checkpoint_prefix empty — fresh run, nothing to resume"
+%{ endif ~}
+
+# ---------------------------------------------------------------- shell env + launch script
+cat > /etc/profile.d/llm-lab.sh <<PROFILE
+export LLM_BUCKET="${bucket}"
+export LLM_WORK_DIR="$WORK_DIR"
+export AWS_DEFAULT_REGION="${region}"
+export PATH="\$HOME/.local/bin:\$PATH"
+PROFILE
+chmod 0644 /etc/profile.d/llm-lab.sh
+
+# The actual multi-node launch command, pre-filled with this node's rank and the
+# master's (static, plan-time-known) private IP — see network.tf's
+# local.master_private_ip. Deliberately NOT auto-run at boot: a long, paid,
+# multi-hour job should be started by a human who has just confirmed both nodes
+# are up, the corpus/tokenizer landed, and nvidia-smi looks right — not unattended
+# the moment cloud-init finishes, with no chance to catch a bad config first.
+cat > "$USER_HOME/launch_ddp.sh" <<LAUNCH
+#!/usr/bin/env bash
+# Run this on BOTH nodes at roughly the same time (tmux new -s train, then this).
+# node_rank=${node_rank} on this box; the other node must run its own copy with
+# its own node_rank — do not copy this file between nodes, each one's is already
+# correct for the box it is on.
+set -euo pipefail
+cd "$WORK_DIR"
+export GPT_TARGET_TOKENS=${target_tokens}
+export GPT_GRAD_ACCUM=${grad_accum_steps}
+torchrun --nnodes=${world_size} --node_rank=${node_rank} --nproc_per_node=1 \\
+  --master_addr=${master_addr} --master_port=${dist_port} \\
+  -m gpt.cli.train
+LAUNCH
+chmod 0755 "$USER_HOME/launch_ddp.sh"
+chown "$USER_NAME:$USER_NAME" "$USER_HOME/launch_ddp.sh"
+
+# ---------------------------------------------------------------- checkpoint sync
+# Only rank 0 (master) writes checkpoints — see trainer.py's is_main gating — so
+# only the master node runs this service. The worker has nothing to sync.
+%{ if sync_ckpt && checkpoint_sync_minutes > 0 ~}
+cat > /usr/local/bin/checkpoint-sync.sh <<'CKPTSYNC'
+#!/usr/bin/env bash
+set -uo pipefail
+INTERVAL_MIN=${checkpoint_sync_minutes}
+BUCKET="${bucket}"
+WORK_DIR="WORK_DIR_PLACEHOLDER"
+# Same prefix checkpoint_prefix pulls FROM at boot — periodic sync must write to
+# the exact place a future resume reads from, on either node.
+CKPT_PREFIX="CKPT_PREFIX_PLACEHOLDER"
+
+sync_now() {
+  [ -n "$BUCKET" ] || return 0
+  [ -d "$WORK_DIR/checkpoints" ] || return 0
+  sudo -u ubuntu aws s3 sync "$WORK_DIR/checkpoints/" "s3://$BUCKET/$CKPT_PREFIX" \
+    --exclude "*.tmp" --only-show-errors \
+    && echo "$(date -Is) [ckpt-sync] ok" \
+    || echo "$(date -Is) [ckpt-sync] FAILED"
+}
+
+if [ "$${1:-}" = "--once" ]; then sync_now; exit 0; fi
+
+while true; do
+  sleep $((INTERVAL_MIN * 60))
+  sync_now
+done
+CKPTSYNC
+
+sed -i "s|WORK_DIR_PLACEHOLDER|$WORK_DIR|" /usr/local/bin/checkpoint-sync.sh
+sed -i "s|CKPT_PREFIX_PLACEHOLDER|%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }|" /usr/local/bin/checkpoint-sync.sh
+chmod 0755 /usr/local/bin/checkpoint-sync.sh
+
+cat > /etc/systemd/system/checkpoint-sync.service <<'UNIT'
+[Unit]
+Description=Periodically sync checkpoints to S3 (rank 0 / master only)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/checkpoint-sync.sh
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now checkpoint-sync.service
+echo "checkpoint sync armed (this is the master): every ${checkpoint_sync_minutes} min to s3://${bucket}/%{ if checkpoint_prefix != "" }${checkpoint_prefix}%{ else }checkpoints/%{ endif }"
+%{ else ~}
+echo "checkpoint sync not armed on this node (worker, or checkpoint_sync_minutes = 0)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- spot interruption
+# AWS marks a Spot instance for reclaim ~2 minutes before taking it. Armed on BOTH
+# nodes: a reclaim of EITHER one kills the whole synchronized job, so both need to
+# react. Only the master actually has checkpoints to flush; the worker's watcher
+# mainly gets the loss of that node logged early rather than discovered as a hang.
+%{ if use_spot ~}
+cat > /usr/local/bin/spot-watch.sh <<'SPOTWATCH'
+#!/usr/bin/env bash
+set -uo pipefail
+IMDS=http://169.254.169.254/latest
+
+while true; do
+  TOKEN=$(curl -sX PUT "$IMDS/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 300" 2>/dev/null)
+
+  CODE=$(curl -s -o /tmp/spot-action -w '%%{http_code}' \
+    -H "X-aws-ec2-metadata-token: $TOKEN" \
+    "$IMDS/meta-data/spot/instance-action" 2>/dev/null)
+
+  if [ "$CODE" = "200" ]; then
+    echo "$(date -Is) [spot-watch] INTERRUPTION NOTICE: $(cat /tmp/spot-action)"
+    if [ -x /usr/local/bin/checkpoint-sync.sh ]; then
+      /usr/local/bin/checkpoint-sync.sh --once
+    fi
+    echo "$(date -Is) [spot-watch] this node's DDP peer will now hang on the next collective — expect the whole job to need a restart, not just this box"
+    exit 0
+  fi
+
+  sleep 5
+done
+SPOTWATCH
+
+chmod 0755 /usr/local/bin/spot-watch.sh
+
+cat > /etc/systemd/system/spot-watch.service <<'UNIT'
+[Unit]
+Description=Flush checkpoints (if any) to S3 on Spot interruption notice
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/spot-watch.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now spot-watch.service
+echo "spot interruption watcher armed"
+%{ endif ~}
+
+# ---------------------------------------------------------------- idle watchdog
+# Disabled by default in this module (idle_shutdown_minutes = 0) — see
+# variables.tf for why independent per-node idle detection is a real risk
+# specifically for a synchronized multi-node job, unlike the single-GPU sibling.
+%{ if idle_shutdown_minutes > 0 ~}
+cat > /usr/local/bin/gpu-idle-watchdog.sh <<'WATCHDOG'
+#!/usr/bin/env bash
+# Stops THIS instance after a sustained stretch of idle GPU. Pause it for a
+# session: touch ~/.no-idle-shutdown
+set -uo pipefail
+
+LIMIT_MIN=${idle_shutdown_minutes}
+THRESHOLD=${idle_gpu_threshold_pct}
+REGION="${region}"
+BUCKET="${bucket}"
+WORK_DIR="WORK_DIR_PLACEHOLDER"
+idle_min=0
+
+log() { echo "$(date -Is) [idle-watchdog] $*"; }
+
+while true; do
+  sleep 60
+
+  if [ -f /home/ubuntu/.no-idle-shutdown ]; then
+    idle_min=0
+    continue
+  fi
+
+  util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc '0-9')
+  if [ -z "$util" ]; then
+    log "could not read GPU utilization; assuming busy"
+    idle_min=0
+    continue
+  fi
+
+  if [ "$util" -le "$THRESHOLD" ]; then
+    idle_min=$((idle_min + 1))
+    log "GPU $util% idle for $idle_min/$LIMIT_MIN min"
+  else
+    [ "$idle_min" -gt 0 ] && log "GPU busy again ($util%), resetting"
+    idle_min=0
+  fi
+
+  if [ "$idle_min" -ge "$LIMIT_MIN" ]; then
+    log "idle threshold reached on THIS node — syncing (if master) then stopping. Note: this stops only this node, which will hang the other node's DDP collective if a run is genuinely still active."
+
+    if [ -x /usr/local/bin/checkpoint-sync.sh ]; then
+      /usr/local/bin/checkpoint-sync.sh --once
+    fi
+
+    TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+      -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+    IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+      http://169.254.169.254/latest/meta-data/instance-id)
+
+    aws ec2 stop-instances --region "$REGION" --instance-ids "$IID" \
+      || shutdown -h now
+    exit 0
+  fi
+done
+WATCHDOG
+
+sed -i "s|WORK_DIR_PLACEHOLDER|$WORK_DIR|" /usr/local/bin/gpu-idle-watchdog.sh
+chmod 0755 /usr/local/bin/gpu-idle-watchdog.sh
+
+cat > /etc/systemd/system/gpu-idle-watchdog.service <<'UNIT'
+[Unit]
+Description=Stop this instance when the GPU has been idle too long
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gpu-idle-watchdog.sh
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now gpu-idle-watchdog.service
+echo "idle watchdog armed: stop after ${idle_shutdown_minutes} min at or below ${idle_gpu_threshold_pct}% GPU"
+%{ else ~}
+echo "idle watchdog disabled (idle_shutdown_minutes = 0 — the default for this multi-node module)"
+%{ endif ~}
+
+# ---------------------------------------------------------------- done
+touch "$USER_HOME/BOOTSTRAP_COMPLETE"
+chown "$USER_NAME:$USER_NAME" "$USER_HOME/BOOTSTRAP_COMPLETE"
+echo "=== bootstrap done $(date -Is) — node_rank=${node_rank}, launch with: bash ~/launch_ddp.sh ==="

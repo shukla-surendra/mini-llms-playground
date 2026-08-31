@@ -1,0 +1,59 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is gitignored)
+
+region  = "us-east-1"
+project = "mini-llm-gpu-ddp"
+
+# ---- compute ---------------------------------------------------------------
+# 2 nodes always, or 0 — see variables.tf's instance_count validation. Each node
+# is 1x L4 g6.xlarge; this is genuine multi-node DDP (two EC2 instances, real
+# network hop), not one box with 2 GPUs.
+instance_type  = "g6.xlarge" # L4 24GB, bf16 + TF32, per node
+root_volume_gb = 100
+
+# On-demand recommended for a real paid run — see variables.tf's use_spot
+# description: a Spot reclaim of EITHER node kills the whole synchronized job,
+# not just that instance's own work. Verify the DDP mechanism for free first with
+# scripts/ddp_smoke_test.py (CPU/gloo, no cloud spend) before touching this.
+use_spot = false
+
+# ---- access ------------------------------------------------------------------
+public_key_path      = "~/.ssh/id_ed25519.pub"
+ssh_private_key_path = "~/.ssh/id_ed25519"
+
+# Leave empty to auto-detect this machine's public IP as a /32.
+# allowed_ssh_cidrs = ["203.0.113.10/32"]
+
+# ---- storage / bootstrap ----------------------------------------------------
+create_bucket = true
+# bucket_name = "my-existing-llm-bucket"
+
+repo_url       = "https://github.com/shukla-surendra/mini-llms-playground.git"
+project_subdir = "from_scratch/custom-gpt-350m-ddp"
+
+# Upload these first — `make upload-corpus` / `make upload-tokenizer` from inside
+# from_scratch/custom-gpt-350m-ddp (its data/ and tokenizer/ already have what you
+# need, copied over from the sibling custom-gpt-350m project).
+corpus_prefix    = "350m-ddp/corpus/"
+tokenizer_prefix = "350m-ddp/tokenizer/"
+
+# ---- training budget ---------------------------------------------------------
+# The real corpus (books + cosmopedia) is 1,015,850,483 train tokens — smaller than
+# this model's Chinchilla-optimal 20N (~6.95B). 4,000,000,000 = ~3.94 epochs over
+# it, inside the ~4-epoch mark DATASET.md documents as still close-to-fresh.
+# Baked into both nodes' generated ~/launch_ddp.sh, not something you re-type by
+# hand on either box. Raise this only once the corpus itself grows past ~1B tokens.
+target_tokens    = 4000000000
+grad_accum_steps = 64 # amortizes DDP's per-sync cost over more no-network compute — see variables.tf
+
+# ---- cost guards ---------------------------------------------------------------
+checkpoint_sync_minutes = 15
+
+# Left at 0 (disabled) deliberately for this module — see variables.tf's
+# idle_shutdown_minutes description for the multi-node-specific risk of an
+# independent per-node watchdog.
+idle_shutdown_minutes = 0
+
+# Free for the first two budgets per account. Set both to arm it. ~2x the
+# single-GPU sibling module's default, since this is 2 instances.
+monthly_budget_usd = 60
+# budget_alert_email = "you@example.com"
