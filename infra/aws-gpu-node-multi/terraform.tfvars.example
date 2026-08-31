@@ -27,7 +27,7 @@ ssh_private_key_path = "~/.ssh/id_ed25519"
 create_bucket = true
 # bucket_name = "my-existing-llm-bucket"
 
-repo_url       = "https://github.com/shukla-surendra/mini-llms-playground.git"
+repo_url       = "https://github.com/shukla-surendra/tiny_llm.git"
 project_subdir = "from_scratch/custom-gpt-350m-ddp"
 
 # Upload these first — `make upload-corpus` / `make upload-tokenizer` from inside
@@ -43,7 +43,8 @@ tokenizer_prefix = "350m-ddp/tokenizer/"
 # Baked into both nodes' generated ~/launch_ddp.sh, not something you re-type by
 # hand on either box. Raise this only once the corpus itself grows past ~1B tokens.
 target_tokens    = 4000000000
-grad_accum_steps = 64 # amortizes DDP's per-sync cost over more no-network compute — see variables.tf
+batch_size       = 4   # verified on real A10G hardware 2026-08-31 — see variables.tf's batch_size description
+grad_accum_steps = 256 # paired with batch_size=4 to hold 2048 seqs/update steady — see variables.tf
 
 # ---- cost guards ---------------------------------------------------------------
 checkpoint_sync_minutes = 15

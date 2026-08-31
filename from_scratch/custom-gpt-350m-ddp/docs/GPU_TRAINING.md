@@ -251,6 +251,14 @@ inter-node security-group rules, corpus/tokenizer/checkpoint sync, and a
 `--master_addr`. The manual steps below are what that module does under the hood, if
 you want to understand or replicate it by hand instead.
 
+> **First real run (2026-08-31, us-east-1):** `g6.xlarge` hit
+> `Server.InsufficientInstanceCapacity` region-wide, so this run actually launched on
+> `g5.xlarge` (A10G, same bf16/TF32 capability, same "G and VT" quota family) instead
+> — see the infra module's own
+> ["Real deployment log"](../../../infra/aws-gpu-node-multi/README.md#real-deployment-log-2026-08-31-us-east-1)
+> for the full quota/capacity debugging story and how to diagnose it fast via
+> CloudTrail next time, rather than waiting on Terraform's retry loop.
+
 1. **Launch both `g6.xlarge` instances in the same Availability Zone** (e.g. both in
    `us-east-1a`, not one in `1a` and one in `1b`). This is the single highest-leverage
    decision here — see cost section below for why.

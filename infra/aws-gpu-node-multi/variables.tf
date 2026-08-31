@@ -195,9 +195,9 @@ variable "force_destroy_bucket" {
 }
 
 variable "repo_url" {
-  description = "Git repo cloned onto both instances at boot."
+  description = "Git repo cloned onto both instances at boot. The local folder is named mini-llms-playground, but the actual GitHub remote (verified via `git remote -v`) is still named tiny_llm — the sibling infra modules' repo_url default has this same mismatch, inherited rather than fixed here since this doc only ever governs this module."
   type        = string
-  default     = "https://github.com/shukla-surendra/mini-llms-playground.git"
+  default     = "https://github.com/shukla-surendra/tiny_llm.git"
 }
 
 variable "repo_dir_name" {
@@ -241,9 +241,15 @@ variable "target_tokens" {
 }
 
 variable "grad_accum_steps" {
-  description = "GPT_GRAD_ACCUM for the generated launch script. Higher than this project's own single-GPU default (4) on purpose: without EFA, DDP's gradient all-reduce is a real, largely-unhidden cost over plain TCP between two g6.xlarge nodes, and it fires once per grad_accum_steps window, not once per micro-step. Raising this amortizes that fixed sync cost over more sync-free local compute — the concrete lever, not a knob to leave at the single-GPU value. Tune from a real measured run, not this default, before a long paid one."
+  description = "GPT_GRAD_ACCUM for the generated launch script. Higher than this project's own single-GPU default (4) on purpose: without EFA, DDP's gradient all-reduce is a real, largely-unhidden cost over plain TCP between two g6.xlarge nodes, and it fires once per grad_accum_steps window, not once per micro-step. Raising this amortizes that fixed sync cost over more sync-free local compute — the concrete lever, not a knob to leave at the single-GPU value. Tune from a real measured run, not this default, before a long paid one. Paired with batch_size below — the product batch_size*grad_accum_steps*2 nodes is the effective seqs/update; change them together, not one alone, or the effective batch size silently shifts."
   type        = number
-  default     = 64
+  default     = 256
+}
+
+variable "batch_size" {
+  description = "GPT_BATCH_SIZE for the generated launch script — overrides this project's own single-GPU default (16), which OOMs on a real 2-node run: verified on-hardware (2026-08-31, A10G/g5.xlarge, 22.06 GiB usable) that 16 and 8 both fail with CUDA OOM (16 fails in the forward pass at ~21.9 GiB used; 8 still fails even with PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True, ~22.0 GiB used, forward pass), while 4 completes a full train/eval/checkpoint/demo-generation cycle cleanly with real headroom. See infra README's 'Real deployment log' for the full investigation. Raise this only after re-verifying on the actual instance_type in use — this number is hardware-fit, not a training-quality choice — and change grad_accum_steps in the same direction to hold the effective batch size steady."
+  type        = number
+  default     = 4
 }
 
 ########################################

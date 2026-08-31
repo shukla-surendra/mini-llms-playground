@@ -136,7 +136,19 @@ set -euo pipefail
 cd "$WORK_DIR"
 export GPT_TARGET_TOKENS=${target_tokens}
 export GPT_GRAD_ACCUM=${grad_accum_steps}
-torchrun --nnodes=${world_size} --node_rank=${node_rank} --nproc_per_node=1 \\
+export GPT_BATCH_SIZE=${batch_size}
+# expandable_segments avoids allocator fragmentation at this batch/context size —
+# verified necessary on-hardware (2026-08-31): without it, batch_size=8 still OOMs
+# even though the failing allocation was small and >2 GiB showed as "reserved but
+# unallocated" — classic fragmentation, not genuine exhaustion. See variables.tf's
+# batch_size description and the infra README's deployment log for the full story.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Absolute path to uv, not bare "uv" or a PATH export: bootstrap's own PATH= line
+# only applies within that script's own run, never to a later SSH/tmux shell — and
+# uv sync (above) installs into this project's own .venv/, which is also never on
+# PATH by default. Bare "torchrun" or bare "uv" both fail with "command not found"
+# here even though bootstrap succeeded and both actually exist on disk.
+"$HOME/.local/bin/uv" run torchrun --nnodes=${world_size} --node_rank=${node_rank} --nproc_per_node=1 \\
   --master_addr=${master_addr} --master_port=${dist_port} \\
   -m gpt.cli.train
 LAUNCH

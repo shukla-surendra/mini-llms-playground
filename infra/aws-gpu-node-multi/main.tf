@@ -53,6 +53,7 @@ locals {
     master_addr             = local.master_private_ip
     target_tokens           = var.target_tokens
     grad_accum_steps        = var.grad_accum_steps
+    batch_size              = var.batch_size
   }
 
   user_data_master = templatefile("${path.module}/templates/bootstrap.sh.tftpl", merge(local.bootstrap_common, {
