@@ -3,7 +3,11 @@ name = "custom-gpt-50m"
 version = "0.1.0"
 description = "From-scratch GPT with a config-driven model size — train, evaluate, and serve."
 readme = "README.md"
-requires-python = ">=3.10"
+# Narrowed from >=3.10 on 2026-09-01: the metal extra's vllm-metal[vllm] pin can't
+# resolve for 3.10/3.11 (uv's resolver otherwise tries to satisfy every extra across
+# the whole declared range, not just the Python version actually in use). This
+# project's own venv is 3.12 regardless.
+requires-python = ">=3.12"
 dependencies = [
     "torch>=2.2",
     "numpy>=1.26",
@@ -28,6 +32,30 @@ gpt-eval = "gpt.cli.evaluate:main"
 gpt-score = "gpt.cli.score:main"
 gpt-judge = "gpt.cli.judge:main"
 gpt-qa-report = "gpt.cli.qa_report:main"
+gpt-export-vllm = "gpt.cli.export_vllm:main"
+
+[project.optional-dependencies]
+# The export is portable: it only needs Hugging Face serialization dependencies.
+hf-export = [
+    "transformers>=4.46,<6",
+    "safetensors>=0.4",
+]
+# No separate Linux/CUDA "vllm" extra: uv's universal resolver must satisfy every
+# declared extra simultaneously, even ones you'd never install together, and the
+# real `vllm` package's version range and `vllm-metal[vllm]`'s pinned range turned
+# out mutually unsatisfiable in one resolution (2026-09-01). This project only ever
+# serves locally on Apple Silicon, so there is nothing lost by not declaring it —
+# see the sibling custom-gpt-50m/pyproject.toml if a Linux/CUDA serving path is
+# ever actually needed here.
+#
+# vLLM's Apple-Silicon plugin uses MLX/Metal beneath the regular vLLM server.
+# Requires native arm64 Python 3.12+. The plugin's own `vllm` extra installs
+# vLLM core and its `vllm` CLI as well as the Metal/MLX backend.
+metal = [
+    "transformers>=4.46,<6",
+    "safetensors>=0.4",
+    "vllm-metal[vllm]>=0.1; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version >= '3.12'",
+]
 
 [build-system]
 requires = ["hatchling"]

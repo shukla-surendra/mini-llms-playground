@@ -73,3 +73,10 @@ logs/train_eval_history.csv
 outputs/
 checkpoints_archive/
 reports/
+# gpt-export-vllm's output — 100% reproducible from a checkpoint (config.json/
+# generation_config.json are derived from checkpoint metadata; tokenizer.json/
+# tokenizer_config.json are just GPT-2's standard public tokenizer). The
+# model.safetensors inside was already covered by *.safetensors above, but the
+# small json/tokenizer files weren't, so the directory would still show as
+# untracked. Matches at any depth, same as outputs/ and reports/.
+exports/

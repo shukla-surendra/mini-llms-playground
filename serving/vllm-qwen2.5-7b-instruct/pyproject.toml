@@ -1,0 +1,20 @@
+[project]
+name = "vllm-qwen2.5-7b-instruct-serving"
+version = "0.1.0"
+description = "Platform-aware local serving for Qwen2.5-7B-Instruct"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+vllm = ["vllm>=0.11"]
+cpu = ["fastapi>=0.110", "pydantic>=2.6", "torch>=2.2", "transformers>=4.44", "uvicorn>=0.29"]
+# Not vllm-metal: as of 2026-09, vllm-metal[vllm]'s pinned vllm versions still pull
+# in nvidia-cudnn-frontend/nvidia-cutlass-dsl unconditionally, neither of which has
+# ever shipped a macOS wheel (same failure the vllm-smollm2-135m sibling's serve.py
+# already documents and falls back from). mlx-lm's own `mlx_lm.server` is MLX-native,
+# genuinely works today (verified 2026-09-01, 4-bit quant, ~4.4GB peak memory,
+# ~5x realtime on an M-series chip), and gives the same OpenAI-compatible surface.
+metal = ["mlx-lm>=0.19; sys_platform == 'darwin' and platform_machine == 'arm64'"]
+
+[tool.uv]
+package = false

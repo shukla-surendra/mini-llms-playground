@@ -123,9 +123,11 @@ general how-to; this covers *exactly what state things are in right now*).
 - `_shared_data/raw/` (repo root's `from_scratch/`, gitignored) is the
   established, documented shared-data convention since 2026-08-18 — check there
   before ever re-fetching anything for any project in this family.
-- AWS: `g5.xlarge` (A10G) in `us-east-1c` (`subnet-0ddd28a9cc6a2f624`) is the
-  combination confirmed to actually get EC2 capacity on 2026-08-31 — a
-  reasonable default to keep reusing, not a guarantee it'll work again.
+- AWS: `g5.xlarge` (A10G) in `us-east-1c` (the subnet already set in the local,
+  gitignored `50m-ddp.tfvars` — see `50m-ddp.tfvars.example`, account-specific
+  subnet ids don't belong in a public doc) is the combination confirmed to
+  actually get EC2 capacity on 2026-08-31 — a reasonable default to keep
+  reusing, not a guarantee it'll work again.
 - `infra/aws-gpu-node-multi/` now serves **both** DDP projects via Terraform
   workspaces (`default` = 350m-ddp, `50m-ddp` = this project) — same module
   code, separate state, zero infra duplication. `50m-ddp.tfvars` is the

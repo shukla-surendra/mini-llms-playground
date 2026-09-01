@@ -1,3 +1,5 @@
+# cp 50m-ddp.tfvars.example 50m-ddp.tfvars   (50m-ddp.tfvars is gitignored)
+#
 # Deploy this file against the "50m-ddp" Terraform workspace, not "default" —
 # "default" holds custom-gpt-350m-ddp's state (its bucket/IAM/SG live there).
 # Same module code, separate state, zero infra duplication:
@@ -10,20 +12,20 @@ region  = "us-east-1"
 project = "mini-llm-gpu-50m-ddp"   # distinct from 350m-ddp's "mini-llm-gpu-ddp" — separate bucket/SG/key-pair names, same AWS account
 
 # ---- compute ---------------------------------------------------------------
-# Tried L4 (g6.xlarge) first on 2026-09-01 per cost preference — hit
-# Server.InsufficientInstanceCapacity repeatedly (~11 min, 5+ failed RunInstances
-# calls per CloudTrail, zero instances created) in this same subnet's AZ
-# (us-east-1c), same failure custom-gpt-350m-ddp hit on 2026-08-31. Region-wide
-# G6 capacity crunch appears to still be ongoing, not a one-off. Falling back to
-# g5.xlarge (A10G 24GB), the type already confirmed working on this exact subnet.
-instance_type  = "g5.xlarge" # A10G 24GB
+# g6.xlarge (L4) is the module default and cheaper (~$0.80/hr vs A10G's ~$1.01/hr),
+# but has hit Server.InsufficientInstanceCapacity repeatedly on this account —
+# both custom-gpt-350m-ddp (2026-08-31) and this project (2026-09-01) fell back
+# to g5.xlarge (A10G) after L4 failed for several minutes with zero instances
+# created. Worth retrying L4 first each time; fall back if it stalls.
+instance_type  = "g5.xlarge" # A10G 24GB — confirmed working on this account
 root_volume_gb = 100
 
-# Same AZ/subnet g5.xlarge was confirmed to actually get capacity on 2026-08-31 —
-# a reasonable starting point, not a guarantee; if RunInstances stalls, check
-# CloudTrail for Server.InsufficientInstanceCapacity before assuming a real hang
-# (see custom-gpt-350m-ddp/infra README's "Real deployment log").
-subnet_id = "subnet-0ddd28a9cc6a2f624" # us-east-1c, default VPC
+# Leave unset to auto-pick a default-VPC subnet in an AZ that actually offers
+# instance_type (see variables.tf's subnet_id description). Set explicitly only
+# once you've confirmed a specific subnet/AZ combination actually gets capacity
+# for your account — do not copy one from another account's docs, subnet ids are
+# account-specific and won't resolve elsewhere.
+# subnet_id = "subnet-xxxxxxxxxxxxxxxxx"
 
 use_spot = false
 
@@ -47,23 +49,21 @@ checkpoint_prefix = "50m-ddp/checkpoints/"
 tokenizer_prefix = ""
 
 # ---- training budget ---------------------------------------------------------
-# Phase 1 (pretrain) target — real number, from `gpt-tokenize` on 2026-09-01
-# against the 30GB pretrain corpus truncated to a ~4.7GB prefix (data/train.txt,
-# line-boundary safe cut; full corpus was far more than this 51.48M-param model's
+# Phase 1 (pretrain) target, from `gpt-tokenize` on 2026-09-01 against the 30GB
+# pretrain corpus truncated to a ~4.7GB prefix (data/train.txt, line-boundary
+# safe cut; full corpus was far more than this 51.48M-param model's
 # Chinchilla-optimal ~1.03B tokens needs — see docs/RESUME_POINT_2026-08-31.md).
-# data/train.bin.json: 996,638,534 tokens exactly — essentially one full epoch at
-# Chinchilla-optimal, no need to inflate this the way 350m-ddp's 4x-epoch budget
-# did (that model needs ~20x more tokens per param at its larger size).
+# 996,638,534 tokens exactly — essentially one full epoch at Chinchilla-optimal,
+# no need to inflate this the way 350m-ddp's 4x-epoch budget did (that model
+# needs ~20x more tokens per param at its larger size). Recompute for your own
+# corpus build rather than reusing this number as-is.
 target_tokens = 996638534
 
-# NOT YET VERIFIED ON REAL A10G HARDWARE — this model (51.48M params) is ~7x
-# smaller than custom-gpt-350m-ddp's 347M, so these are a reasonable starting
-# GUESS, not a measured-safe number the way 350m-ddp's batch_size=4 was. Per this
-# project's own docs/MULTI_NODE_DDP.md and the 350m-ddp OOM saga it's grounded
-# in: run a short single-GPU test (GPT_STEPS=30-60) on ONE node BEFORE deploying
-# the second node or committing to a real multi-hour run, and adjust these two
-# values together (same effective-batch-size math) if it OOMs or if a much
-# larger batch turns out to fit comfortably.
+# Verified on real A10G hardware 2026-09-01: a 40-step single-GPU smoke test
+# completed cleanly with real headroom (~13GB of 23GB used, including both eval
+# passes). Re-verify on whatever instance_type you actually deploy before
+# trusting these — see docs/MULTI_NODE_DDP.md and the 350m-ddp OOM saga
+# (docs/RUN_LOG_2026-08-31.md in that project) for why this matters.
 batch_size       = 16
 grad_accum_steps = 16
 

@@ -7,10 +7,13 @@
 *.tfstate.*
 .terraform.tfstate.lock.info
 
-# Real values (may hold your home IP, email, bucket names)
-terraform.tfvars
+# Real values (may hold your home IP, email, bucket names, subnet/AZ ids). Was
+# just "terraform.tfvars" (350m-ddp's file) — 50m-ddp.tfvars slipped through that
+# narrow match and got committed with a real subnet id on 2026-09-01. Broadened
+# to *.tfvars so any future per-workspace file is covered automatically.
+*.tfvars
 *.auto.tfvars
-!terraform.tfvars.example
+!*.tfvars.example
 
 # Saved plans
 *.tfplan
