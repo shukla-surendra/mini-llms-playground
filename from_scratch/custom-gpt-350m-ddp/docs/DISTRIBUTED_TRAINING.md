@@ -33,6 +33,124 @@ Irrelevant at `world_size=1` — both collapse to the identical single-process p
 since `trainer.py`'s `use_fsdp = world_size > 1 and train_cfg.parallelism == "fsdp"`
 only ever matters once there's more than one rank to shard or replicate across.
 
+## What was actually added to the base project to support DDP at all
+
+This project forked `custom-gpt-350m`, which has no distributed code — `world_size` is
+always 1, `training_model` is always just `raw_model`. Getting to genuine 2-node DDP
+meant touching three files, each for a different reason:
+
+- **`src/gpt/cli/train.py`** — reads `RANK`/`WORLD_SIZE`/`LOCAL_RANK` from the
+  environment (`torchrun` sets these per spawned process before this module even
+  imports — see below for exactly how), calls `dist.init_process_group(backend=...)`
+  when `world_size > 1`, picks `nccl` when CUDA is available and `gloo` otherwise (the
+  CPU smoke-test path), selects this rank's own `cuda:{local_rank}` device, and calls
+  `dist.destroy_process_group()` in a `finally` block on the way out. With no
+  `torchrun` launcher (`WORLD_SIZE` unset), every one of these branches is a no-op —
+  single-GPU behavior is bit-for-bit unchanged from before DDP support existed.
+- **`src/gpt/config.py`** — `resolve_train_config(context_length, world_size)` makes
+  `GPT_TARGET_TOKENS` world-size-aware: `tokens_per_step = batch_size * ctx *
+  world_size`, so the same token budget resolves to a *different* `steps` count
+  depending on how many ranks are actually splitting the work — without this, running
+  the same `steps` under 2 ranks would silently double total tokens consumed (each
+  rank processes its own batch independently, in parallel), a real footgun the base
+  project doesn't need to guard against since it's always `world_size=1`.
+- **`src/gpt/training/trainer.py`** — the largest change, all in `train()`/`_run_loop()`:
+  the `DDP(raw_model, device_ids=...)` wrap; per-rank RNG seeding
+  (`torch.manual_seed(train_cfg.seed + rank)`) so ranks draw different random batches
+  from the identical shared corpus, not the same batch redundantly; the `no_sync()` /
+  `is_accum_boundary` gating described below; and `is_main = rank == 0` gating for
+  everything that would otherwise race or duplicate if every rank did it — printing,
+  the progress bar, eval, and checkpoint writes.
+
+## How one node finds the other (rendezvous) — nothing here is bespoke code
+
+This project never opens a socket to "find" the other machine — that's entirely
+`torchrun`'s job, before this project's own code runs at all:
+
+```bash
+# On the master (node_rank=0):
+torchrun --nnodes=2 --node_rank=0 --nproc_per_node=1 \
+  --master_addr=<master's private IP> --master_port=29500 -m gpt.cli.train
+# On the worker (node_rank=1), identical except node_rank:
+torchrun --nnodes=2 --node_rank=1 --nproc_per_node=1 \
+  --master_addr=<same master private IP> --master_port=29500 -m gpt.cli.train
+```
+
+1. `torchrun` on **each** machine computes this process's global `RANK` (from
+   `node_rank` × `nproc_per_node` + local index) and `WORLD_SIZE` (`nnodes` ×
+   `nproc_per_node`), and sets `RANK`/`WORLD_SIZE`/`LOCAL_RANK`/`MASTER_ADDR`/
+   `MASTER_PORT` as environment variables — all of this happens *before* Python even
+   imports `gpt.cli.train`.
+2. `cli/train.py` calls `dist.init_process_group(backend="nccl")` — **no address,
+   rank, or world_size argument passed explicitly**. This is PyTorch's default
+   **`env://`** rendezvous method: it reads exactly the environment variables
+   `torchrun` just set.
+3. Mechanically, rank 0's call opens a `TCPStore` (a minimal shared key-value store)
+   listening on `MASTER_ADDR:MASTER_PORT`. Every rank — including rank 0 itself —
+   connects to that same address as a client and writes its own identity in. Every
+   rank's `init_process_group()` call blocks until all `WORLD_SIZE` ranks have
+   checked in, then all of them return together.
+
+The precise answer to "how does master know about worker": it doesn't reach out —
+**the worker connects to the master's known address**, and master's own
+`init_process_group()` call is what's listening there, waiting for exactly
+`world_size` check-ins before it lets any rank proceed. This is why `master_addr`
+only ever needs to be node 0's address, never node 1's — node 1's own address isn't
+needed anywhere in the launch command at all, only in the security group rule
+allowing traffic between the two (see `infra/aws-gpu-node-multi/network.tf`'s
+self-referencing rule). Once this bootstrap TCP connection exists, it's reused once
+more to exchange NCCL's own internal setup handshake (unique IDs for the real
+GPU-to-GPU communication channels) — nothing about *that* step is this project's code
+either; it happens inside `DDP(raw_model, ...)`'s constructor, the first time it needs
+to broadcast rank 0's initial weights to every other rank.
+
+## What actually happens on a gradient "sync" — bucketing, `no_sync()`, and the boundary step
+
+`DistributedDataParallel(raw_model, device_ids=[local_rank])`
+(`trainer.py`) does two things at construction time, both automatic, neither visible
+in this project's own code: it broadcasts rank 0's initial weights to every other
+rank (every replica starts identical), and it registers a backward hook on every
+parameter, grouped into a handful of gradient "buckets" (~25 MB each by default) —
+grouping matters because syncing 300M individual small parameters one at a time
+would be dominated by per-call network/kernel-launch overhead; a bucket firing one
+collective call for many parameters' gradients together amortizes that cost.
+
+Left alone, those hooks would fire an all-reduce after **every** `.backward()` call —
+correct, but far too expensive over plain TCP between two non-EFA nodes if done once
+per micro-step. This project avoids that with the `no_sync()` context manager,
+gated on `is_accum_boundary` (`_run_loop`, `trainer.py`):
+
+```python
+is_accum_boundary = (step - start_step + 1) % train_cfg.grad_accum_steps == 0
+sync_now = is_accum_boundary or step == train_cfg.steps - 1
+
+if world_size > 1 and not sync_now:
+    with training_model.no_sync():        # suppress the auto-hooks for this call
+        (loss / train_cfg.grad_accum_steps).backward()
+else:
+    (loss / train_cfg.grad_accum_steps).backward()  # hooks fire normally — real sync
+
+if sync_now:
+    optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
+```
+
+Concretely, for `grad_accum_steps=256` (this project's validated 2-node setting):
+**255 of every 256 micro-steps run `no_sync()`** — each rank computes its own forward
++ backward locally, and gradients simply *accumulate* into each parameter's existing
+`.grad` tensor (ordinary PyTorch behavior; nothing DDP-specific about accumulation
+itself). Zero network traffic crosses between the two nodes for those 255 steps. On
+the 256th (boundary) step, `no_sync()` is not used — the bucket hooks fire for real,
+each bucket's now-fully-accumulated gradient gets **all-reduced** (summed across both
+ranks, then divided by world_size to average) over NCCL, overlapping with backward
+computation for earlier layers still in flight. Only *after* that all-reduce
+completes does `optimizer.step()` run — identically on both ranks, since both now
+hold the exact same averaged gradient. That single shared-gradient step, applied
+locally by a deterministic optimizer starting from already-identical weights, is the
+entire mechanism keeping both replicas bit-identical — there is no separate "merge
+the two models" step anywhere, ever, because they're never allowed to diverge in the
+first place.
+
 ## Real, verified proof the two mechanisms actually differ
 
 Ran `scripts/ddp_smoke_test.py` and `scripts/fsdp_smoke_test.py` back to back, same

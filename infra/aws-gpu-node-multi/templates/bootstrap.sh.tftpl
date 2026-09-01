@@ -148,7 +148,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # uv sync (above) installs into this project's own .venv/, which is also never on
 # PATH by default. Bare "torchrun" or bare "uv" both fail with "command not found"
 # here even though bootstrap succeeded and both actually exist on disk.
-"$HOME/.local/bin/uv" run torchrun --nnodes=${world_size} --node_rank=${node_rank} --nproc_per_node=1 \\
+"\$HOME/.local/bin/uv" run torchrun --nnodes=${world_size} --node_rank=${node_rank} --nproc_per_node=1 \\
   --master_addr=${master_addr} --master_port=${dist_port} \\
   -m gpt.cli.train
 LAUNCH
